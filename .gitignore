@@ -15,3 +15,6 @@ android/app/src/main/assets/capacitor.plugins.json
 *.jks
 .DS_Store
 Thumbs.db
+
+# 本地签名恢复凭据，绝不入库
+签名备份-*.txt
