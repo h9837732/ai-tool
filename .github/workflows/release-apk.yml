@@ -16,10 +16,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 取代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: 装 JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
@@ -35,8 +35,15 @@ jobs:
       - name: 同步前端到 www 并灌进原生工程
         run: bun run sync
 
-      - name: 装 Android SDK
-        uses: android-actions/setup-android@v3
+      - name: 配置 Android SDK
+        run: |
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          SDKM=$(ls -d "$SDK"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1)
+          yes | "$SDKM" --licenses > /dev/null 2>&1 || true
+          "$SDKM" --install "platform-tools" "platforms;android-36" 2>&1 | tail -3 || true
+          echo "sdk.dir=$SDK" > android/local.properties
 
       - name: 缓存 Gradle
         uses: actions/cache@v4
@@ -71,4 +78,4 @@ jobs:
             钥匙 · 自带 API Key 的 AI 对话客户端
 
             下载下面的 APK 传到手机安装（需要允许「安装未知来源应用」）。
-            这是未签名的 release 包，装不上就用 Build APK 流程出的 debug 包。
+            这是未签名的 release 包；装不上就用 Build APK 流程出的 debug 包。
