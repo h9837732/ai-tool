@@ -1,5 +1,5 @@
 /* 离线缓存：先走网络，拿不到再读缓存。只在 https 或 localhost 下生效。 */
-const CACHE = 'keyapp-v7';
+const CACHE = 'keyapp-v8';
 const ASSETS = [
   './',
   './index.html',

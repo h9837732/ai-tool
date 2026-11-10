@@ -3,7 +3,20 @@
 一个纯前端的对话界面：你填自己的 API Key，请求从浏览器（或打包后的 App）直接发到服务商，
 对话记录只留在本机。没有后端、没有账号、没有中转服务器。
 
-模型名核对时间：**2026-11**
+当前版本：**1.1.0**　模型名核对时间：**2026-11**
+
+---
+
+## 1.1.0 更新了什么
+
+- **设置搬进对话列表**：底栏「设置」在「导出全部」左边，聊天输入区只剩「技能」和「＋」
+- **设置分成四类**：密钥 / 外观 / 语言 / 关于，点页签切换
+- **中英文界面**：语言页签里切换，只改界面文字，不动你和模型的对话
+- **默认主题**：蓝白·大肥鱼（浅色 + 蓝色强调），老用户原来的配色不会被改掉
+- **密钥加密**：App 里用 Android Keystore 的 AES-GCM 加密，明文副本在加密成功后删除
+- **临时对话可直接保存**：顶栏「保存」按钮，输入框「＋」菜单里也有一个
+- **跨域服务商可用**：智谱、混元这类不给 CORS 头的，在 App 里自动改走原生请求
+- **升级不丢数据**：有版本号 + 迁移逻辑，只补不删
 
 ---
 
@@ -52,10 +65,48 @@ cd android && ./gradlew assembleDebug
 # 产物在 android/app/build/outputs/apk/debug/
 ```
 
+
+### 出签名版 APK
+
+1. 本地生成一份 keystore（一次就够，**务必备份**，丢了就没法覆盖更新）：
+
+```bash
+keytool -genkeypair -v -keystore keyapp-release.keystore   -alias keyapp -keyalg RSA -keysize 2048 -validity 10000
+```
+
+2. 转成 base64 放进仓库 Secrets：
+
+```bash
+# Linux / macOS
+base64 -w0 keyapp-release.keystore
+# Windows PowerShell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("keyapp-release.keystore"))
+```
+
+3. 仓库 → Settings → Secrets and variables → Actions，加 4 个：
+
+| Secret | 内容 |
+|---|---|
+| `KEYSTORE_BASE64` | 上一步的 base64 整串 |
+| `KEYSTORE_PASSWORD` | 密钥库口令 |
+| `KEY_ALIAS` | 别名，例如 `keyapp` |
+| `KEY_PASSWORD` | 密钥口令 |
+
+4. 打标签推送，Release 页面就会出现签名后的 APK：
+
+```bash
+git tag v1.1.0
+git push origin v1.1.0
+```
+
+没配 Secrets 也能跑，会退回出未签名的 release 包。
+
 ### 打包带来的两个变化
 
-- **不再受浏览器跨域限制**：`capacitor.config.json` 里开了 `CapacitorHttp`，
-  WebView 的请求会走原生层，智谱 GLM、腾讯混元、讯飞星火这些不返回 CORS 头的服务商也能用了
+- **不再受浏览器跨域限制**：自己写了个 `NativeHttp` 插件，正常请求仍走 `fetch`（有流式打字机效果），
+  只有在跨域被拦下时才自动改走原生请求（这条会失去流式，消息下方有说明）。
+  没有用 Capacitor 自带的 `CapacitorHttp`，因为它会接管 `window.fetch` 并把响应变成非流式，
+  所有服务商都会失去逐字输出
 - **不再注册离线缓存**：资源本来就在安装包里，再挂 Service Worker 会让更新不生效
 
 ### 改完前端要重新同步
@@ -219,6 +270,8 @@ Claude 开思考时只接受 `temperature=1`，所以这时自动不发该字段
 F:\AI Tool\
 ├── index.html                  页面骨架
 ├── css/app.css                 全部样式
+├── js/i18n.js                  中英文文案表 ← 加语言或改文案只改这里
+├── js/secure.js                原生能力封装（钥匙串加密 + 原生 HTTP）
 ├── js/providers.js             服务商预设表 ← 加新服务商只改这里
 ├── js/md.js                    零依赖 Markdown 渲染
 ├── js/store.js                 本机存储层
@@ -229,6 +282,10 @@ F:\AI Tool\
 ├── build.mjs                   把前端同步到 www/
 ├── capacitor.config.json       Capacitor 配置（CapacitorHttp 已开）
 ├── android/                    Android Studio 工程
+│   └── app/src/main/java/com/keyapp/chat/
+│       ├── MainActivity.java           注册本地插件
+│       ├── SecureStorePlugin.java      Keystore 加密存储
+│       └── NativeHttpPlugin.java       原生 HTTP（绕开跨域）
 ├── .github/workflows/build-apk.yml   云端编译 APK
 └── www/                        同步产物，打包时生成（不用手改）
 ```
@@ -239,7 +296,8 @@ F:\AI Tool\
 
 | 内容 | 存储键 |
 |---|---|
-| 密钥条目 | `keyapp:profiles` |
+| 数据结构版本 | `keyapp:schemaVersion` |
+| 密钥条目 | `keyapp:profiles`（App 里另有加密副本 `keyapp:secureProfiles`） |
 | 当前在用哪条 | `keyapp:activeProfile` |
 | 技能库 | `keyapp:skills` |
 | 提示词、温度、主题、配色、强度 | `keyapp:settings` |
@@ -257,11 +315,11 @@ F:\AI Tool\
 ## 已知限制
 
 - 网页版受跨域限制，智谱/混元/讯飞要打包成 App 才能用
-- 临时对话不进任何存储，切走或刷新就没了（除非先点保存）
+- 临时对话不进任何存储，切走或刷新就没了（除非点「保存」）
+- 原生请求兜底没有流式输出；正常服务商不受影响
 - 导入备份不会恢复密钥条目（怕一份备份泄漏所有 Key）
 - 单条对话太长时会自动裁掉最早的几轮（约 12 万字符上限）
 - 图片随对话存进本机，多了占存储；存不下时会提示导出备份
 - Markdown 不支持表格，代码块没有「复制」按钮
 - 语音输入依赖浏览器识别（Chrome 可用，Safari/Firefox 有限）
 - 函数调用、联网搜索还没做
-- APK 里的 Key 仍是明文存储

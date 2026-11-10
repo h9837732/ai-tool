@@ -5,28 +5,73 @@
 
   /* ---------- 常量 ---------- */
 
+  var APP_VERSION = '1.1.0';
+
+  var CHANGELOG = [
+    {
+      v: '1.1.0',
+      date: '2026-11',
+      zh: [
+        '设置移进对话列表，分「密钥 / 外观 / 语言 / 关于」四类',
+        '新增英文界面，可随时切换',
+        '默认配色改为「蓝白·大肥鱼」',
+        'App 里的密钥改用系统钥匙串加密存储',
+        '临时对话可直接存为正式对话',
+        '不返回跨域头的服务商在 App 里改走原生请求',
+        '升级不会动已有的对话、密钥和设置'
+      ],
+      en: [
+        'Settings moved into the conversation drawer, split into Keys / Appearance / Language / About',
+        'English interface, switchable at any time',
+        'New default palette: Blue Fish',
+        'Keys are now encrypted with the system keystore in the app',
+        'Save a temporary chat as a normal one',
+        'Providers without CORS headers now use native requests in the app',
+        'Upgrading never touches your chats, keys or settings'
+      ]
+    },
+    {
+      v: '1.0.0',
+      date: '2026-11',
+      zh: [
+        '13 家服务商预设，模型名核对到 2026-11',
+        '多密钥条目、技能库、五档思考强度',
+        '附件：相册、文件、粘贴、拖放，图片自动压缩',
+        '安卓工程与云端出包'
+      ],
+      en: [
+        '13 provider presets, model names verified 2026-11',
+        'Multiple keys, skills library, five effort levels',
+        'Attachments: photos, files, paste, drag-and-drop with image compression',
+        'Android project and cloud APK builds'
+      ]
+    }
+  ];
+
+  /* 默认：蓝白·大肥鱼 */
   var DEFAULT_PREFS = {
-    temperature: 1, maxTokens: 2048, systemPrompt: '', theme: 'dark', intensity: 2,
-    palette: 'brass', customAccent: '#D8A25C', customBg: '#0F1613'
+    temperature: 1, maxTokens: 2048, systemPrompt: '', theme: 'light', intensity: 2,
+    palette: 'fish', customAccent: '#2E7BD6', customBg: '#F2F8FF', lang: 'zh'
   };
 
   /* 配色方案：accent 为强调色，bg 为底色；每套分别给深/浅两版 */
   var PALETTES = [
-    { id: 'brass', name: '黄铜', accent: '#D8A25C', accentLight: '#A9691F', bg: '#0F1613', bgLight: '#F1F3F0' },
-    { id: 'jade', name: '青瓷', accent: '#6FB9A0', accentLight: '#27745F', bg: '#0C1614', bgLight: '#EFF4F1' },
-    { id: 'ink', name: '石墨', accent: '#9FB3C8', accentLight: '#3C5872', bg: '#0D0F11', bgLight: '#F0F2F4' },
-    { id: 'wine', name: '绛紫', accent: '#C98FA6', accentLight: '#8E3F5C', bg: '#150E13', bgLight: '#F5EFF2' },
-    { id: 'ember', name: '赤陶', accent: '#E08A5B', accentLight: '#A9502A', bg: '#161010', bgLight: '#F5F0EC' },
-    { id: 'custom', name: '自定义', accent: null, bg: null, bgLight: null }
+    { id: 'fish', nameKey: 'pal.fish', accent: '#5AA9F5', accentLight: '#2E7BD6', bg: '#0B1620', bgLight: '#F2F8FF' },
+    { id: 'brass', nameKey: 'pal.brass', accent: '#D8A25C', accentLight: '#A9691F', bg: '#0F1613', bgLight: '#F1F3F0' },
+    { id: 'jade', nameKey: 'pal.jade', accent: '#6FB9A0', accentLight: '#27745F', bg: '#0C1614', bgLight: '#EFF4F1' },
+    { id: 'ink', nameKey: 'pal.ink', accent: '#9FB3C8', accentLight: '#3C5872', bg: '#0D0F11', bgLight: '#F0F2F4' },
+    { id: 'wine', nameKey: 'pal.wine', accent: '#C98FA6', accentLight: '#8E3F5C', bg: '#150E13', bgLight: '#F5EFF2' },
+    { id: 'ember', nameKey: 'pal.ember', accent: '#E08A5B', accentLight: '#A9502A', bg: '#161010', bgLight: '#F5F0EC' },
+    { id: 'custom', nameKey: 'pal.custom', accent: null, bg: null, bgLight: null }
   ];
 
   /* 思考强度：5 档，各自向服务商的能力映射（见 buildRequest） */
   var EFFORT = [
-    { key: 'off', name: '关闭' },
-    { key: 'low', name: '低' },
-    { key: 'mid', name: '中' },
-    { key: 'high', name: '高' },
-    { key: 'max', name: '无限制' }
+    { key: 'off', nameKey: 'effort.off' },
+    { key: 'low', nameKey: 'effort.low' },
+    { key: 'mid', nameKey: 'effort.mid' },
+    { key: 'high', nameKey: 'effort.high' },
+    { key: 'max', nameKey: 'effort.max' }
   ];
 
   /* DeepSeek：none / low / high / max（medium 归一到 high） */
@@ -40,31 +85,45 @@
 
   var SKILL_SAMPLES = [
     {
+      nameKey: 'sample.tr.name', hintKey: 'sample.tr.hint', bodyKey: 'sample.tr.body',
       name: '翻译成英式英语',
       hint: '写论文、改句子时',
-      body: '把用户给出的内容翻译成英式英语（British English），保留原文段落结构，用词和拼写遵循英式规范，不要额外解释。'
+      body: '把用户给出的内容翻译成英式英语（British English），保留原文段落结构，用词和拼写遵循英式规范，不要额外解释。',
+      nameEn: 'Translate to British English',
+      hintEn: 'When writing papers',
+      bodyEn: 'Translate what the user gives you into British English, keeping the original paragraph structure and British spelling and word choice. Do not add explanations.'
     },
     {
       name: '先给结论',
       hint: '需要快速判断时',
-      body: '先用一句话给出结论，再展开理由。理由是分点的，每点不超过两行。不要写开场客套话。'
+      body: '先用一句话给出结论，再展开理由。理由是分点的，每点不超过两行。不要写开场客套话。',
+      nameEn: 'Answer first',
+      hintEn: 'When you need a quick call',
+      bodyEn: 'Give the conclusion in one sentence first, then the reasoning as bullet points, at most two lines each. Skip the pleasantries.'
     },
     {
       name: '代码要能跑',
       hint: '写代码、改 bug 时',
-      body: '给代码时给出完整可运行的文件内容，标出文件路径。改动用注释标出原因。不要省略成省略号。'
+      body: '给代码时给出完整可运行的文件内容，标出文件路径。改动用注释标出原因。不要省略成省略号。',
+      nameEn: 'Runnable code',
+      hintEn: 'When writing or fixing code',
+      bodyEn: 'Always give complete runnable file contents and label each file path. Mark changes with comments explaining why. Never abbreviate with ellipses.',
+      
     },
     {
       name: '只要中文',
       hint: '中文环境',
-      body: '始终用简体中文回答，专有名词保留英文原文并加括号注明。'
+      body: '始终用简体中文回答，专有名词保留英文原文并加括号注明。',
+      nameEn: 'Chinese only',
+      hintEn: 'Chinese context',
+      bodyEn: 'Always answer in Simplified Chinese. Keep proper nouns in English with the Chinese in brackets.'
     }
   ];
 
   /* ---------- 状态 ---------- */
 
   var state = {
-    prefs: null,        // temperature / maxTokens / systemPrompt / theme
+    prefs: null,        // temperature / maxTokens / systemPrompt / theme / palette / lang
     profiles: [],       // 密钥条目
     activeId: '',
     skills: [],
@@ -77,7 +136,9 @@
     persistTimer: 0,
     editingProfileId: '',
     editingSkillId: '',
-    sheetBeforeProfile: 'deepseek'
+    sheetBeforeProfile: 'deepseek',
+    settingsTab: 'keys',
+    secureOn: false
   };
 
   /* 附件限制 */
@@ -123,7 +184,7 @@
     if (!text) return;
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(text).then(
-        function () { toast('已复制'); },
+        function () { toast(t('toast.copied')); },
         function () { fallbackCopy(text); }
       );
     } else {
@@ -138,8 +199,8 @@
     ta.style.opacity = '0';
     document.body.appendChild(ta);
     ta.select();
-    try { document.execCommand('copy'); toast('已复制'); }
-    catch (e) { toast('复制失败，请手动选中'); }
+    try { document.execCommand('copy'); toast(t('toast.copied')); }
+    catch (e) { toast(t('toast.copyFail')); }
     document.body.removeChild(ta);
   }
 
@@ -157,7 +218,7 @@
   }
 
   function profileLabel(p) {
-    if (!p) return '未选择密钥';
+    if (!p) return t('composer.noKey');
     if (p.label) return p.label;
     var prov = profileProvider(p);
     return prov.name + (p.model ? ' · ' + p.model : '');
@@ -174,9 +235,24 @@
   }
 
   function saveProfiles() {
-    if (!Store.saveProfiles(state.profiles)) {
-      toast('密钥没能存进本机：存储可能已满或被浏览器禁止。', 5000);
-    }
+    /* 保存是异步的（App 里要过一道钥匙串加密），但界面不等它 */
+    Promise.resolve(Store.saveProfiles(state.profiles)).then(function (r) {
+      if (!r || !r.ok) {
+        toast(t('toast.storageFull'), 5000);
+        return;
+      }
+      state.secureOn = !!r.secure;
+      renderSecureNote();
+    }).catch(function () { /* 已在 Store 内兜底 */ });
+  }
+
+  function renderSecureNote() {
+    var text = state.secureOn ? t('keys.secureOn') : t('keys.secureOff');
+    [el.secureNote, el.secureNote2].forEach(function (n) {
+      if (!n) return;
+      n.textContent = text;
+      n.dataset.on = state.secureOn ? 'true' : 'false';
+    });
   }
 
   function migrateLegacy() {
@@ -204,8 +280,9 @@
     if (!state.profiles.length) {
       var none = document.createElement('p');
       none.className = 'none';
-      none.textContent = '还没有密钥。点右上角「新增」加第一条。';
+      none.textContent = t('keys.empty');
       box.appendChild(none);
+      renderSecureNote();
       return;
     }
     for (var i = 0; i < state.profiles.length; i++) {
@@ -220,18 +297,18 @@
       main.type = 'button';
       main.className = 'prow-main';
       main.dataset.activate = p.id;
-      var keyTail = p.apiKey ? '••••' + esc(p.apiKey.slice(-4)) : '未填 Key';
+      var keyTail = p.apiKey ? '••••' + esc(p.apiKey.slice(-4)) : t('keys.noKey');
       main.innerHTML =
-        '<span class="prow-name">' + esc(profileLabel(p)) + (p.id === state.activeId ? '<span class="prow-flag">在用</span>' : '') + '</span>' +
-        '<span class="prow-meta">' + esc(prov.name) + ' · ' + esc(p.model || '未选模型') + ' · ' + keyTail + '</span>';
+        '<span class="prow-name">' + esc(profileLabel(p)) + (p.id === state.activeId ? '<span class="prow-flag">' + t('keys.inUse') + '</span>' : '') + '</span>' +
+        '<span class="prow-meta">' + esc(prov.name) + ' · ' + esc(p.model || t('keys.noModel')) + ' · ' + keyTail + '</span>';
       row.appendChild(main);
 
       var edit = document.createElement('button');
       edit.type = 'button';
       edit.className = 'mini-btn';
       edit.dataset.edit = p.id;
-      edit.textContent = '改';
-      edit.setAttribute('aria-label', '编辑这条密钥');
+      edit.textContent = t('common.edit');
+      edit.setAttribute('aria-label', t('keys.editTitle'));
       row.appendChild(edit);
 
       var del = document.createElement('button');
@@ -254,7 +331,7 @@
         if (state.profiles[i].id === id) { p = state.profiles[i]; break; }
       }
     }
-    el.profileFormTitle.textContent = p ? '编辑密钥' : '新增密钥';
+    el.profileFormTitle.textContent = p ? t('keys.editTitle') : t('keys.addTitle');
     el.profileForm.hidden = false;
 
     populateProfileProvider(p ? p.providerId : (state.sheetBeforeProfile || 'deepseek'));
@@ -263,7 +340,7 @@
     el.pfKey.value = p ? (p.apiKey || '') : '';
     el.pfModel.value = p ? (p.model || '') : '';
     el.pfKey.type = 'password';
-    el.btnPfToggleKey.textContent = '显示';
+    el.btnPfToggleKey.textContent = t('keys.show');
     onProfileProviderChange(true);
     el.profileForm.scrollIntoView({ block: 'nearest' });
     setTimeout(function () { el.pfKey.focus(); }, 150);
@@ -308,8 +385,8 @@
 
     var bits = [];
     if (p.note) bits.push(p.note);
-    if (p.browserBlocked && !isNative) bits.push('⚠ 这家不返回跨域允许头，纯网页直连会被拦下；打包成 App 后可以正常用。');
-    if (p.keyUrl) bits.push('拿 Key：' + p.keyUrl);
+    if (p.browserBlocked && !isNative) bits.push('⚠ ' + t('err.corsBlocked', { provider: p.name }));
+    if (p.keyUrl) bits.push('Key: ' + p.keyUrl);
     el.pfProviderNote.textContent = bits.join(' ');
     el.pfProviderNote.dataset.warn = (p.browserBlocked && !isNative) ? 'true' : 'false';
     state.sheetBeforeProfile = id;
@@ -324,9 +401,9 @@
     var model = el.pfModel.value.trim();
     var prov = getProvider(providerId);
 
-    if (!apiKey) { toast('API Key 不能是空的'); el.pfKey.focus(); return; }
-    if (!baseUrl && !prov.baseUrl) { toast('接口地址不能是空的'); el.pfBase.focus(); return; }
-    if (!model) { toast('填一个默认模型名'); el.pfModel.focus(); return; }
+    if (!apiKey) { toast(t('keys.needKey')); el.pfKey.focus(); return; }
+    if (!baseUrl && !prov.baseUrl) { toast(t('keys.needBase')); el.pfBase.focus(); return; }
+    if (!model) { toast(t('keys.needModel')); el.pfModel.focus(); return; }
     if (!label) label = prov.name;
 
     if (state.editingProfileId) {
@@ -354,7 +431,7 @@
     renderProfileList();
     renderHint();
     renderEmpty();
-    toast(wasEditing ? '已保存' : '已添加「' + label + '」');
+    toast(wasEditing ? t('toast.saved') : t('skills.enabled', { name: label }));
   }
 
   function deleteProfile(id) {
@@ -363,7 +440,7 @@
       if (state.profiles[i].id === id) { p = state.profiles[i]; break; }
     }
     if (!p) return;
-    if (!window.confirm('删除「' + profileLabel(p) + '」这条密钥？删掉要重新填。')) return;
+    if (!window.confirm(t('keys.deleteAsk', { name: profileLabel(p) }))) return;
     state.profiles = state.profiles.filter(function (x) { return x.id !== id; });
     if (state.editingProfileId === id) closeProfileForm();
     saveProfiles();
@@ -374,18 +451,18 @@
     renderProfileList();
     renderHint();
     renderEmpty();
-    toast('已删除');
+    toast(t('toast.deleted'));
   }
 
   async function fetchModelList() {
     var prov = getProvider(el.pfProvider.value);
     var base = (el.pfBase.value.trim() || prov.baseUrl || '').replace(/\/+$/, '');
     var key = el.pfKey.value.trim();
-    if (!base) { toast('先填接口地址'); return; }
-    if (!key) { toast('先填 API Key'); return; }
+    if (!base) { toast(t('err.noBase')); return; }
+    if (!key) { toast(t('err.noKey')); return; }
 
     el.btnPfFetch.disabled = true;
-    el.btnPfFetch.textContent = '拉取中';
+    el.btnPfFetch.textContent = t('keys.fetching');
     try {
       var headers = { 'authorization': 'Bearer ' + key };
       if (prov.protocol === 'anthropic') {
@@ -395,23 +472,40 @@
           'anthropic-dangerous-direct-browser-access': 'true'
         };
       }
-      var res = await fetch(base + '/models', { headers: headers });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      var j = await res.json();
-      var list = (j.data || j.models || []).map(function (x) {
-        return typeof x === 'string' ? x : (x.id || x.name || '');
-      }).filter(Boolean).sort();
-      if (!list.length) throw new Error('列表是空的');
+      var list = [];
+      try {
+        var res = await fetch(base + '/models', { headers: headers });
+        if (!res.ok) throw new ApiError(res.status, 'HTTP ' + res.status);
+        var j = await res.json();
+        list = (j.data || j.models || []).map(function (x) {
+          return typeof x === 'string' ? x : (x.id || x.name || '');
+        }).filter(Boolean);
+      } catch (e) {
+        /* 浏览器被跨域拦下时，App 里改走原生请求再试一次 */
+        if (isNative && Native.NativeHttp.hasPlugin()) {
+          var r = await Native.NativeHttp.request(base + '/models', headers, {});
+          if (r && r.ok) {
+            try {
+              var jj = JSON.parse(r.text);
+              list = (jj.data || jj.models || []).map(function (x) {
+                return typeof x === 'string' ? x : (x.id || x.name || '');
+              }).filter(Boolean);
+            } catch (e2) { throw e; }
+          } else { throw e; }
+        } else { throw e; }
+      }
+      list = list.sort();
+      if (!list.length) throw new Error('empty');
       el.pfModelOptions.innerHTML = list.map(function (m) {
         return '<option value="' + esc(m) + '"></option>';
       }).join('');
       if (list.indexOf(el.pfModel.value.trim()) < 0) el.pfModel.value = list[0];
-      toast('拉到 ' + list.length + ' 个模型');
+      toast(list.length + ' models');
     } catch (err) {
-      toast('拉取失败：' + (err.message || err) + '。可以直接手填模型名。', 5000);
+      toast((err && err.message ? err.message : '') + ' — ' + t('keys.fetch'), 5000);
     } finally {
       el.btnPfFetch.disabled = false;
-      el.btnPfFetch.textContent = '拉取列表';
+      el.btnPfFetch.textContent = t('keys.fetch');
     }
   }
 
@@ -422,7 +516,7 @@
   }
 
   function saveSkills() {
-    if (!Store.saveSkills(state.skills)) toast('技能没能存进本机。', 4000);
+    if (!Store.saveSkills(state.skills)) toast(t('toast.storageFull'), 4000);
   }
 
   function renderSkillList() {
@@ -445,7 +539,7 @@
       var main = document.createElement('div');
       main.className = 'srow-main';
       main.innerHTML =
-        '<span class="srow-name">' + esc(s.name || '未命名技能') + '</span>' +
+        '<span class="srow-name">' + esc(s.name || t('skills.title')) + '</span>' +
         '<span class="srow-hint">' + esc(s.hint || String(s.body || '').slice(0, 40)) + '</span>';
       row.appendChild(main);
 
@@ -454,7 +548,7 @@
       sw.className = 'switch';
       sw.setAttribute('role', 'switch');
       sw.setAttribute('aria-checked', s.enabled ? 'true' : 'false');
-      sw.setAttribute('aria-label', (s.enabled ? '停用' : '启用') + '技能 ' + (s.name || ''));
+      sw.setAttribute('aria-label', (s.enabled ? '✓' : '✗') + ' ' + (s.name || ''));
       sw.dataset.toggle = s.id;
       sw.innerHTML = '<span class="knob"></span>';
       row.appendChild(sw);
@@ -463,16 +557,16 @@
       edit.type = 'button';
       edit.className = 'mini-btn';
       edit.dataset.sedit = s.id;
-      edit.textContent = '改';
-      edit.setAttribute('aria-label', '编辑技能');
+      edit.textContent = t('common.edit');
+      edit.setAttribute('aria-label', t('skills.editTitle'));
       row.appendChild(edit);
 
       var del = document.createElement('button');
       del.type = 'button';
       del.className = 'mini-btn danger';
       del.dataset.sdel = s.id;
-      del.textContent = '删';
-      del.setAttribute('aria-label', '删除技能');
+      del.textContent = t('common.delete');
+      del.setAttribute('aria-label', t('common.delete'));
       row.appendChild(del);
 
       box.appendChild(row);
@@ -490,7 +584,7 @@
       b.type = 'button';
       b.className = 'chip';
       b.dataset.sample = String(i);
-      b.textContent = s.name;
+      b.textContent = I18N.getLang() === 'en' ? (s.nameEn || s.name) : s.name;
       box.appendChild(b);
     }
   }
@@ -503,7 +597,7 @@
         if (state.skills[i].id === id) { s = state.skills[i]; break; }
       }
     }
-    el.skillFormTitle.textContent = s ? '编辑技能' : '新增技能';
+    el.skillFormTitle.textContent = s ? t('skills.editTitle') : t('skills.addTitle');
     el.skillForm.hidden = false;
     el.sfName.value = s ? (s.name || '') : '';
     el.sfHint.value = s ? (s.hint || '') : '';
@@ -521,8 +615,8 @@
     var name = el.sfName.value.trim();
     var hint = el.sfHint.value.trim();
     var body = el.sfBody.value.trim();
-    if (!name) { toast('给技能起个名字'); el.sfName.focus(); return; }
-    if (!body) { toast('指令正文不能是空的'); el.sfBody.focus(); return; }
+    if (!name) { toast(t('skills.needName')); el.sfName.focus(); return; }
+    if (!body) { toast(t('skills.needBody')); el.sfBody.focus(); return; }
 
     if (state.editingSkillId) {
       for (var i = 0; i < state.skills.length; i++) {
@@ -534,7 +628,7 @@
       }
     } else {
       state.skills.push({ id: uid(), name: name, hint: hint, body: body, enabled: true, createdAt: Date.now() });
-      toast('已添加技能「' + name + '」，已打开');
+      toast(t('skills.enabled', { name: name }));
     }
     saveSkills();
     closeSkillForm();
@@ -549,7 +643,7 @@
       if (state.skills[i].id === id) { s = state.skills[i]; break; }
     }
     if (!s) return;
-    if (!window.confirm('删除技能「' + (s.name || '未命名') + '」？')) return;
+    if (!window.confirm(t('skills.deleteAsk', { name: s.name || '' }))) return;
     state.skills = state.skills.filter(function (x) { return x.id !== id; });
     if (state.editingSkillId === id) closeSkillForm();
     saveSkills();
@@ -618,8 +712,8 @@
   function renderEffort() {
     var e = currentEffort();
     if (!el.effortName) return;
-    el.effortName.textContent = e.name;
-    el.effortPopName.textContent = e.name;
+    el.effortName.textContent = t(e.nameKey);
+    el.effortPopName.textContent = t(e.nameKey);
     el.effortRange.value = String(state.prefs.intensity);
     el.btnEffort.dataset.off = e.key === 'off' ? 'true' : 'false';
 
@@ -631,7 +725,7 @@
 
     var prov = profileProvider(activeProfile());
     var ok = providerSupportsEffort(prov);
-    el.effortNote.textContent = ok ? '' : '这家不认思考强度参数，选了也不会发出去。';
+    el.effortNote.textContent = ok ? '' : t('effort.unsupported');
     el.effortNote.hidden = ok;
   }
 
@@ -647,8 +741,8 @@
     var C = 2 * Math.PI * 8.5;
     el.ctxBar.setAttribute('stroke-dasharray', (C * pct).toFixed(1) + ' ' + C.toFixed(1));
     el.ctxRing.dataset.warn = pct > 0.8 ? 'true' : 'false';
-    el.ctxRing.title = '上下文 ' + Math.round(pct * 100) + '%（' + chars + ' 字符，' + CTX_LIMIT + ' 封顶）';
-    el.ctxRing.setAttribute('aria-label', '上下文占用 ' + Math.round(pct * 100) + '%');
+    el.ctxRing.title = t('tool.ctx') + ' ' + Math.round(pct * 100) + '% · ' + chars + '/' + CTX_LIMIT;
+    el.ctxRing.setAttribute('aria-label', t('tool.ctx') + ' ' + Math.round(pct * 100) + '%');
   }
 
   function setEffort(idx) {
@@ -729,23 +823,23 @@
   }
 
   function applyTheme() {
-    var pref = state.prefs ? state.prefs.theme : 'dark';
+    var pref = state.prefs ? state.prefs.theme : 'light';
     var eff = pref;
     if (pref === 'auto') {
       eff = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
     }
     document.documentElement.dataset.theme = eff;
 
-    var pal = paletteById(state.prefs.palette || 'brass');
+    var pal = paletteById(state.prefs.palette || 'fish');
     var accent, bg;
     if (pal.id === 'custom') {
-      accent = state.prefs.customAccent || '#D8A25C';
+      accent = state.prefs.customAccent || '#2E7BD6';
       bg = eff === 'light'
-        ? blend(state.prefs.customBg || '#0F1613', '#FFFFFF', 0.88)
-        : (state.prefs.customBg || '#0F1613');
+        ? blend(state.prefs.customBg || '#F2F8FF', '#FFFFFF', 0.55)
+        : (state.prefs.customBg || '#0B1620');
     } else {
       accent = eff === 'light' ? (pal.accentLight || pal.accent) : pal.accent;
-      bg = eff === 'light' ? (pal.bgLight || '#F1F3F0') : pal.bg;
+      bg = eff === 'light' ? (pal.bgLight || '#F2F8FF') : pal.bg;
     }
 
     clearVarOverrides();
@@ -767,7 +861,7 @@
     var box = el.paletteList;
     if (!box) return;
     box.innerHTML = '';
-    var current = state.prefs.palette || 'brass';
+    var current = state.prefs.palette || 'fish';
     for (var i = 0; i < PALETTES.length; i++) {
       var p = PALETTES[i];
       var b = document.createElement('button');
@@ -776,15 +870,15 @@
       b.dataset.pal = p.id;
       if (p.id === current) b.dataset.on = 'true';
       var swatchBg = p.id === 'custom'
-        ? (state.prefs.customBg || '#0F1613')
-        : p.bg;
+        ? (state.prefs.customBg || '#F2F8FF')
+        : p.bgLight;
       var swatchAccent = p.id === 'custom'
-        ? (state.prefs.customAccent || '#D8A25C')
-        : p.accent;
+        ? (state.prefs.customAccent || '#2E7BD6')
+        : (p.accentLight || p.accent);
       b.innerHTML =
         '<span class="pal-dot" style="background:' + esc(swatchBg) + '">' +
         '<i style="background:' + esc(swatchAccent) + '"></i></span>' +
-        '<span class="pal-name">' + esc(p.name) + '</span>';
+        '<span class="pal-name">' + esc(t(p.nameKey)) + '</span>';
       box.appendChild(b);
     }
     if (el.paletteCustom) el.paletteCustom.hidden = current !== 'custom';
@@ -795,10 +889,20 @@
     el.fTemp.value = String(state.prefs.temperature == null ? 1 : state.prefs.temperature);
     el.tempVal.textContent = Number(el.fTemp.value).toFixed(1);
     el.fMax.value = String(state.prefs.maxTokens || 2048);
-    el.fTheme.value = state.prefs.theme || 'dark';
-    el.fAccent.value = state.prefs.customAccent || '#D8A25C';
-    el.fBg.value = state.prefs.customBg || '#0F1613';
+    el.fTheme.value = state.prefs.theme || 'light';
+    el.fAccent.value = state.prefs.customAccent || '#2E7BD6';
+    el.fBg.value = state.prefs.customBg || '#F2F8FF';
     renderPaletteList();
+    renderLangList();
+  }
+
+  function renderLangList() {
+    if (!el.langList) return;
+    var btns = el.langList.querySelectorAll('.lang');
+    for (var i = 0; i < btns.length; i++) {
+      if (btns[i].dataset.lang === I18N.getLang()) btns[i].dataset.on = 'true';
+      else delete btns[i].dataset.on;
+    }
   }
 
   function readPrefsForm() {
@@ -875,27 +979,25 @@
     var list = Array.prototype.slice.call(files || []);
     if (!list.length) return;
     var room = MAX_ATTACH_COUNT - state.attachments.length;
-    if (room <= 0) { toast('最多带 ' + MAX_ATTACH_COUNT + ' 个附件'); return; }
+    if (room <= 0) { toast(t('toast.maxAttach', { n: MAX_ATTACH_COUNT })); return; }
     if (list.length > room) {
       list = list.slice(0, room);
-      toast('只取前 ' + room + ' 张，一次最多 ' + MAX_ATTACH_COUNT + ' 个附件');
+      toast(t('toast.tooManyAttach', { n: room }));
     }
     var jobs = list.map(function (f) {
       return shrinkImage(f).then(function (dataUrl) {
         state.attachments.push({
-          id: uid(), kind: 'image', name: f.name || '图片',
+          id: uid(), kind: 'image', name: f.name || 'image',
           size: Math.round(dataUrl.length * 0.75), dataUrl: dataUrl
         });
       }).catch(function () {
-        toast('「' + (f.name || '图片') + '」读不进来', 3000);
+        toast(t('toast.attachFail', { name: f.name || 'image' }), 3000);
       });
     });
     Promise.all(jobs).then(function () {
       renderAttachments();
       var prov = profileProvider(activeProfile());
-      if (!prov.vision) {
-        toast(prov.name + ' 默认不支持看图，图片可能被忽略。支持看图的有 OpenAI、Gemini、Claude、Grok、通义 VL、硅基流动的部分模型。', 6000);
-      }
+      if (!prov.vision) toast(t('toast.noVision', { provider: prov.name }), 6000);
     });
   }
 
@@ -903,13 +1005,13 @@
     var list = Array.prototype.slice.call(files || []);
     if (!list.length) return;
     var room = MAX_ATTACH_COUNT - state.attachments.length;
-    if (room <= 0) { toast('最多带 ' + MAX_ATTACH_COUNT + ' 个附件'); return; }
+    if (room <= 0) { toast(t('toast.maxAttach', { n: MAX_ATTACH_COUNT })); return; }
     if (list.length > room) list = list.slice(0, room);
 
     var tooBig = list.filter(function (f) { return f.size > MAX_TEXT_BYTES; });
     if (tooBig.length) {
-      var names = tooBig.map(function (f) { return f.name; }).join('、');
-      if (!window.confirm(names + ' 超过 100 KB。塞进对话会占用很多上下文，确定要加吗？')) {
+      var names = tooBig.map(function (f) { return f.name; }).join(', ');
+      if (!window.confirm(t('toast.bigFile', { names: names }))) {
         list = list.filter(function (f) { return f.size <= MAX_TEXT_BYTES; });
         if (!list.length) return;
       }
@@ -918,11 +1020,11 @@
     var jobs = list.map(function (f) {
       return readAsText(f).then(function (text) {
         state.attachments.push({
-          id: uid(), kind: 'text', name: f.name || '文本',
+          id: uid(), kind: 'text', name: f.name || 'file',
           size: f.size, text: text
         });
       }).catch(function () {
-        toast('「' + (f.name || '文件') + '」读不进来', 3000);
+        toast(t('toast.attachFail', { name: f.name || 'file' }), 3000);
       });
     });
     Promise.all(jobs).then(renderAttachments);
@@ -1001,7 +1103,7 @@
     var full = text || '';
     for (var j = 0; j < docs.length; j++) {
       var ext = extOf(docs[j].name);
-      full += (full ? '\n\n' : '') + '【文件：' + docs[j].name + '】\n```' + ext + '\n' + docs[j].text + '\n```';
+      full += (full ? '\n\n' : '') + '【' + docs[j].name + '】\n```' + ext + '\n' + docs[j].text + '\n```';
     }
 
     if (!images.length) return full;
@@ -1030,7 +1132,7 @@
     persistNow();
     state.conv = {
       id: uid(),
-      title: '新对话',
+      title: t('bar.newChat'),
       model: '',
       temp: !!temp,
       createdAt: Date.now(),
@@ -1061,16 +1163,19 @@
     // 空对话：显示「临时 / 正式」切换
     el.btnTemp.hidden = !empty;
     if (empty) {
-      el.btnTemp.textContent = isTemp ? '临时' : '正式';
+      el.btnTemp.textContent = isTemp ? t('bar.tempOn') : t('bar.formalOn');
       el.btnTemp.dataset.on = isTemp ? 'true' : 'false';
-      el.btnTemp.title = isTemp
-        ? '当前是临时对话，不会保存。点一下改成正式对话'
-        : '当前是正式对话，会自动保存。点一下改成临时对话';
+      el.btnTemp.title = isTemp ? t('bar.tempTipOn') : t('bar.tempTipOff');
       el.btnTemp.setAttribute('aria-label', el.btnTemp.title);
     }
 
-    // 临时且有内容：显示保存
-    el.btnSaveTemp.hidden = !(isTemp && !empty);
+    // 临时且有内容：显示保存（顶栏 + 加号菜单两处都能保存）
+    var canSave = isTemp && !empty;
+    el.btnSaveTemp.hidden = !canSave;
+    el.btnSaveTemp.textContent = t('bar.saveTemp');
+    el.btnSaveTemp.title = t('bar.saveTempTip');
+    el.btnSaveTemp.setAttribute('aria-label', t('bar.saveTempTip'));
+    if (el.menuSaveTemp) el.menuSaveTemp.hidden = !canSave;
   }
 
   function toggleTemp() {
@@ -1083,10 +1188,10 @@
       state.index = state.index.filter(function (x) { return x.id !== conv.id; });
       Store.saveIndex(state.index);
       renderConvList();
-      toast('临时对话：不会存到本机，退出就没了');
+      toast(t('toast.tempOn'));
     } else {
       persistNow();
-      toast('正式对话：会自动保存');
+      toast(t('toast.tempOff'));
     }
     renderBarState();
     renderEmpty();
@@ -1098,11 +1203,11 @@
     if (!conv || !conv.temp) return;
     conv.temp = false;
     // 补一个能认出来的标题
-    if (!conv.title || conv.title === '新对话') {
+    if (!conv.title || conv.title === t('bar.newChat') || conv.title === '新对话') {
       for (var i = 0; i < conv.messages.length; i++) {
         if (conv.messages[i].role === 'user' && conv.messages[i].content) {
-          var t = String(conv.messages[i].content).replace(/\s+/g, ' ').trim();
-          conv.title = t.length > 24 ? t.slice(0, 24) + '…' : (t || '新对话');
+          var raw = String(conv.messages[i].content).replace(/\s+/g, ' ').trim();
+          conv.title = raw.length > 24 ? raw.slice(0, 24) + '…' : (raw || t('bar.newChat'));
           break;
         }
       }
@@ -1112,13 +1217,13 @@
     renderBarState();
     renderEmpty();
     renderHint();
-    toast('已保存到对话列表');
+    toast(t('toast.savedToList'));
   }
 
   function openConv(id) {
     if (state.streaming) stopGeneration();
     var conv = Store.loadConv(id);
-    if (!conv) { toast('这条对话读不出来了'); return; }
+    if (!conv) { toast(t('err.other', { msg: 'conv' })); return; }
     persistNow();
     state.conv = conv;
     if (!Array.isArray(conv.messages)) conv.messages = [];
@@ -1152,7 +1257,7 @@
     state.index.sort(function (a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0); });
     var okIndex = Store.saveIndex(state.index);
     if (!okConv || !okIndex) {
-      toast('保存失败：本机存储可能已满。先导出备份，再删掉一些旧对话。', 6000);
+      toast(t('toast.storageFull'), 6000);
     }
     renderConvList();
     renderCtx();
@@ -1171,13 +1276,13 @@
       else newConv();
     }
     renderConvList();
-    toast('已删除');
+    toast(t('toast.deleted'));
   }
 
   function renameConv(id) {
     var conv = Store.loadConv(id);
     if (!conv) return;
-    var name = window.prompt('改个名字', conv.title);
+    var name = window.prompt(t('drawer.rename'), conv.title);
     if (name === null) return;
     name = name.trim();
     if (!name) return;
@@ -1191,25 +1296,25 @@
     renderConvList();
   }
 
-  function maybeRetitle(text) {
+  function maybeRetitle(raw) {
     if (!state.conv) return;
-    if (state.conv.title && state.conv.title !== '新对话') return;
-    var t = text.replace(/\s+/g, ' ').trim();
-    state.conv.title = t.length > 24 ? t.slice(0, 24) + '…' : t;
+    if (state.conv.title && state.conv.title !== t('bar.newChat') && state.conv.title !== '新对话') return;
+    var s = String(raw).replace(/\s+/g, ' ').trim();
+    state.conv.title = s.length > 24 ? s.slice(0, 24) + '…' : s;
     renderTitle();
   }
 
   /* ---------- 渲染 ---------- */
 
   function renderTitle() {
-    el.convTitle.textContent = (state.conv && state.conv.title) || '新对话';
+    el.convTitle.textContent = (state.conv && state.conv.title) || t('bar.newChat');
   }
 
   /* 离开临时对话前提醒：临时内容不会进列表 */
   function leaveTempIfNeeded(next) {
     var conv = state.conv;
     if (conv && conv.temp && conv.messages.length) {
-      if (!window.confirm('当前是临时对话，离开就丢了。先保存吗？\n\n确定 = 不保存，直接离开')) return;
+      if (!window.confirm(t('toast.leaveTemp'))) return;
     }
     next();
   }
@@ -1217,17 +1322,17 @@
   function renderHint() {
     var p = activeProfile();
     var bits = [];
-    if (!p) bits.push('未配置密钥');
-    else bits.push(p.model || '未选模型');
-    bits.push('强度 ' + currentEffort().name);
+    if (!p) bits.push(t('composer.noKey'));
+    else bits.push(p.model || t('composer.noModel'));
+    bits.push(t('effort.title') + ' ' + t(currentEffort().nameKey));
     var n = enabledSkills().length;
-    if (n) bits.push('技能 ' + n);
-    if (state.conv && state.conv.temp) bits.push('临时');
+    if (n) bits.push(t('tool.skills') + ' ' + n);
+    if (state.conv && state.conv.temp) bits.push(t('composer.tempMark'));
 
     var warn = !p || (profileProvider(p).browserBlocked && !isNative);
     el.statusLine.textContent = bits.join(' · ');
     el.statusLine.dataset.warn = warn ? 'true' : 'false';
-    el.modelName.textContent = p ? (p.model || '未选模型') : '未配置密钥';
+    el.modelName.textContent = p ? (p.model || t('composer.noModel')) : t('composer.noKey');
 
     updateSkillBadge();
     renderEffort();
@@ -1241,7 +1346,7 @@
     if (!state.index.length) {
       var none = document.createElement('p');
       none.className = 'conv-none';
-      none.textContent = '还没有对话';
+      none.textContent = t('drawer.empty');
       list.appendChild(none);
       return;
     }
@@ -1254,22 +1359,22 @@
       var open = document.createElement('button');
       open.className = 'conv-open';
       open.dataset.id = item.id;
-      open.innerHTML = '<span class="conv-row-title">' + esc(item.title || '未命名对话') + '</span>' +
+      open.innerHTML = '<span class="conv-row-title">' + esc(item.title || t('bar.newChat')) + '</span>' +
         '<span class="conv-row-meta">' + esc(item.model || '') + ' · ' + timeLabel(item.updatedAt) + '</span>';
       row.appendChild(open);
 
       var mdBtn = document.createElement('button');
       mdBtn.className = 'conv-mini';
       mdBtn.dataset.md = item.id;
-      mdBtn.setAttribute('aria-label', '导出为 Markdown');
+      mdBtn.setAttribute('aria-label', 'MD');
       mdBtn.textContent = 'MD';
       row.appendChild(mdBtn);
 
       var del = document.createElement('button');
       del.className = 'conv-mini danger';
       del.dataset.del = item.id;
-      del.setAttribute('aria-label', '删除对话');
-      del.textContent = '删';
+      del.setAttribute('aria-label', t('common.delete'));
+      del.textContent = t('common.delete');
       row.appendChild(del);
 
       list.appendChild(row);
@@ -1295,22 +1400,22 @@
 
     if (!hasKey) {
       el.emptyState.innerHTML =
-        '<p class="empty-lead">先接上你自己的钥匙</p>' +
-        '<p class="empty-text">填一个 API Key 就能用。请求从这台设备直接发往服务商，对话只存本机。</p>' +
-        '<button class="btn-primary" type="button" data-act="open-keys">填入 API Key</button>';
+        '<p class="empty-lead">' + esc(t('empty.noKey.lead')) + '</p>' +
+        '<p class="empty-text">' + esc(t('empty.noKey.text')) + '</p>' +
+        '<button class="btn-primary" type="button" data-act="open-keys">' + esc(t('empty.noKey.btn')) + '</button>';
     } else {
       var prov = profileProvider(p);
       var skillN = enabledSkills().length;
       el.emptyState.innerHTML =
-        '<p class="empty-lead">问点什么</p>' +
-        '<p class="empty-text">' + esc(p.model || '未指定模型') +
-        (skillN ? ' · ' + skillN + ' 个技能' : '') +
-        (state.conv && state.conv.temp ? ' · 临时对话' : '') +
-        (prov.browserBlocked && !isNative ? '<br>这家服务商不允许浏览器直连。' : '') + '</p>' +
+        '<p class="empty-lead">' + esc(t('empty.ready.lead')) + '</p>' +
+        '<p class="empty-text">' + esc(p.model || t('composer.noModel')) +
+        (skillN ? ' · ' + skillN + ' ' + esc(t('tool.skills')) : '') +
+        (state.conv && state.conv.temp ? ' · ' + esc(t('composer.tempMark')) : '') +
+        (prov.browserBlocked && !isNative ? '<br>' + esc(t('composer.blockedHint')) : '') + '</p>' +
         '<div class="chips">' +
-        '<button class="chip" type="button" data-fill="用三句话解释什么是 API Key，假设我完全不懂技术。">解释 API Key</button>' +
-        '<button class="chip" type="button" data-fill="帮我看看这段代码有什么问题：">看段代码</button>' +
-        '<button class="chip" type="button" data-act="open-skills">加个技能</button>' +
+        '<button class="chip" type="button" data-fill="' + esc(t('empty.fill1')) + '">' + esc(t('empty.chip1')) + '</button>' +
+        '<button class="chip" type="button" data-fill="' + esc(t('empty.fill2')) + '">' + esc(t('empty.chip2')) + '</button>' +
+        '<button class="chip" type="button" data-act="open-skills">' + esc(t('empty.chip3')) + '</button>' +
         '</div>';
     }
   }
@@ -1329,7 +1434,7 @@
     if (msg.reasoningOpen) details.open = true;
     details.addEventListener('toggle', function () { msg.reasoningOpen = details.open; });
     var summary = document.createElement('summary');
-    summary.textContent = '思考过程';
+    summary.textContent = t('msg.reasoning');
     details.appendChild(summary);
     var body = document.createElement('div');
     body.className = 'think-body';
@@ -1346,10 +1451,10 @@
       node.appendChild(acts);
     }
     acts.innerHTML = '';
-    if (msg.content) acts.appendChild(mkBtn('复制', function () { copyText(msg.content); }));
-    if (msg.reasoning) acts.appendChild(mkBtn('复制思考', function () { copyText(msg.reasoning); }));
+    if (msg.content) acts.appendChild(mkBtn(t('common.copy'), function () { copyText(msg.content); }));
+    if (msg.reasoning) acts.appendChild(mkBtn(t('common.copyThink'), function () { copyText(msg.reasoning); }));
     if (msg.role === 'assistant' && state.conv && idx === state.conv.messages.length - 1 && !state.streaming) {
-      acts.appendChild(mkBtn('重新生成', regenerate));
+      acts.appendChild(mkBtn(t('common.regenerate'), regenerate));
     }
   }
 
@@ -1362,7 +1467,7 @@
     head.className = 'msg-head';
     var who = document.createElement('span');
     who.className = 'who';
-    who.textContent = msg.role === 'user' ? '你' : (msg.model || 'AI');
+    who.textContent = msg.role === 'user' ? t('msg.you') : (msg.model || 'AI');
     head.appendChild(who);
     if (msg.at) {
       var when = document.createElement('span');
@@ -1372,8 +1477,8 @@
     if (msg.skills && msg.skills.length) {
       var sk = document.createElement('span');
       sk.className = 'msg-skills';
-      sk.textContent = '技能 ' + msg.skills.length;
-      sk.title = msg.skills.join('、');
+      sk.textContent = t('tool.skills') + ' ' + msg.skills.length;
+      sk.title = msg.skills.join(', ');
       head.appendChild(sk);
     }
     node.appendChild(head);
@@ -1443,37 +1548,29 @@
     var prov = profileProvider(prof);
 
     if (err && err.name === 'ApiError') {
-      var hint = {
-        400: '请求被拒绝：检查模型名是否存在、参数是否超出范围。',
-        401: '密钥无效或已失效，去设置里换一条或重新填。',
-        402: '账户余额不足，去服务商控制台充值。',
-        403: '没有权限：这个 Key 可能没有开通该模型。',
-        404: '接口地址不对：检查地址里是否少了 /v1 这类版本段。',
-        413: '内容太长，超出了模型的上下文窗口。',
-        422: '参数不合法，检查模型名和最大回复长度。',
-        429: '请求太频繁或额度用尽，等一会儿再试。',
-        500: '服务商内部出错，稍后重试。',
-        502: '服务商网关出错，稍后重试。',
-        503: '服务暂时不可用，稍后重试。'
-      }[err.status];
-      var text = hint || ('请求失败（HTTP ' + err.status + '）。');
-      if (/\bmodel\b/i.test(err.message || '') && !hint) text = '模型名好像不对：' + err.message;
-      return text + (err.message ? '\n\n服务商原话：' + err.message : '');
+      var known = [400, 401, 402, 403, 404, 413, 422, 429, 500, 502, 503];
+      var text = t('err.http', { status: err.status });
+      if (known.indexOf(err.status) >= 0) text = t('err.' + err.status);
+      if (/\bmodel\b/i.test(err.message || '') && known.indexOf(err.status) < 0) {
+        text = t('err.modelBad', { msg: err.message });
+      }
+      return text + (err.message ? '\n\n' + t('err.providerSays', { msg: err.message }) : '');
     }
 
-    if (err && err.name === 'AbortError') return '（已停止）';
-    if (!navigator.onLine) return '设备当前没有联网。';
+    if (err && err.name === 'AbortError') return t('common.stopped');
+    if (!navigator.onLine) return t('err.offline');
 
     if (err && (err.name === 'TypeError' || err.name === 'NetworkError' || /fetch/i.test(err.message || ''))) {
       if (prov.browserBlocked && !isNative) {
-        return '连不上 ' + prov.name + '：这家服务商不允许浏览器直连（缺少 CORS 允许头）。' +
-          '换成支持直连的服务商，或者打包成 App 用原生请求绕开这个限制。';
+        return t('err.corsBlocked', { provider: prov.name });
       }
-      return '连不上 ' + prov.name + '。可能是网络不通、需要代理，或者接口地址填错了。' +
-        '（当前地址：' + ((prof && prof.baseUrl) || '未填') + '）';
+      return t('err.network', {
+        provider: prov.name,
+        base: (prof && prof.baseUrl) || '-'
+      });
     }
 
-    return '出错了：' + ((err && err.message) || String(err));
+    return t('err.other', { msg: (err && err.message) || String(err) });
   }
 
   function trimHistory(msgs) {
@@ -1498,12 +1595,12 @@
 
   function buildRequest(history) {
     var prof = activeProfile();
-    if (!prof) throw new Error('还没有密钥。先去设置里加一条。');
+    if (!prof) throw new Error(t('err.noProfile'));
     var prov = profileProvider(prof);
     var base = String(prof.baseUrl || prov.baseUrl || '').trim().replace(/\/+$/, '');
-    if (!base) throw new Error('接口地址是空的，去设置里填一个。');
-    if (!prof.apiKey) throw new Error('这条密钥没有填 API Key。');
-    if (!prof.model) throw new Error('这条密钥没有指定模型。');
+    if (!base) throw new Error(t('err.noBase'));
+    if (!prof.apiKey) throw new Error(t('err.noKey'));
+    if (!prof.model) throw new Error(t('err.noModel'));
 
     var msgs = [];
     for (var i = 0; i < history.length; i++) {
@@ -1647,7 +1744,7 @@
     state.streaming = busy;
     var btn = el.btnSend;
     btn.classList.toggle('stop', busy);
-    btn.setAttribute('aria-label', busy ? '停止生成' : '发送');
+    btn.setAttribute('aria-label', busy ? t('tool.stop') : t('tool.send'));
     btn.innerHTML = busy
       ? '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>'
       : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg>';
@@ -1655,6 +1752,35 @@
 
   function stopGeneration() {
     if (state.controller) state.controller.abort();
+  }
+
+  /* 这个错误值不值得改用原生请求重试：浏览器跨域/网络失败，且服务商本来就不给 CORS 头 */
+  function shouldTryNative(err, prov) {
+    if (!isNative || !Native.NativeHttp.hasPlugin()) return false;
+    if (err && err.name === 'AbortError') return false;
+    if (err && err.name === 'ApiError') return false;   // 服务商真的报错了，重试也一样
+    return !!(prov && prov.browserBlocked);
+  }
+
+  /* 从完整 JSON 里抠出正文和思考过程（非流式） */
+  function extractFull(j, protocol) {
+    var out = { text: '', think: '' };
+    if (!j) return out;
+    if (protocol === 'anthropic') {
+      var blocks = j.content || [];
+      for (var i = 0; i < blocks.length; i++) {
+        var b = blocks[i];
+        if (!b || !b.type) continue;
+        if (b.type === 'text') out.text += b.text || '';
+        else if (b.type === 'thinking') out.think += b.thinking || '';
+      }
+      return out;
+    }
+    var choice = (j.choices && j.choices[0]) || {};
+    var m = choice.message || choice.delta || {};
+    out.text = typeof m.content === 'string' ? m.content : '';
+    out.think = m.reasoning_content || m.reasoning || '';
+    return out;
   }
 
   async function startGeneration(node, botMsg, history, idx) {
@@ -1678,39 +1804,59 @@
       });
     }
 
+    var req = null;
+    var protocol = 'openai';
     try {
-      var req = buildRequest(history);
-      var res = await fetch(req.url, {
-        method: 'POST',
-        headers: req.headers,
-        body: JSON.stringify(req.body),
-        signal: ac.signal
-      });
+      req = buildRequest(history);
+      protocol = profileProvider(activeProfile()).protocol;
 
-      if (!res.ok) {
-        var raw = await res.text();
-        throw new ApiError(res.status, pickServerMessage(raw), raw);
-      }
-      if (!res.body) throw new Error('这个浏览器不支持流式读取。');
-
-      var protocol = profileProvider(activeProfile()).protocol;
-      await readStream(res.body, protocol, {
-        onText: function (t) { botMsg.content += t; paint(); },
-        onThink: function (t) {
-          botMsg.reasoning = (botMsg.reasoning || '') + t;
-          if (!botMsg.content) paint();
-          else ensureReasoning(node, botMsg);
+      try {
+        var res = await fetch(req.url, {
+          method: 'POST',
+          headers: req.headers,
+          body: JSON.stringify(req.body),
+          signal: ac.signal
+        });
+        if (!res.ok) {
+          var raw = await res.text();
+          throw new ApiError(res.status, pickServerMessage(raw), raw);
         }
-      });
+        if (!res.body) throw new Error(t('err.noStream'));
+
+        await readStream(res.body, protocol, {
+          onText: function (chunk) { botMsg.content += chunk; paint(); },
+          onThink: function (chunk) {
+            botMsg.reasoning = (botMsg.reasoning || '') + chunk;
+            if (!botMsg.content) paint();
+            else ensureReasoning(node, botMsg);
+          }
+        });
+      } catch (inner) {
+        /* App 里遇到不允许跨域的服务商：改走原生请求（会丢掉流式） */
+        if (!shouldTryNative(inner, profileProvider(activeProfile()))) throw inner;
+
+        var body = {}; for (var k in req.body) if (Object.prototype.hasOwnProperty.call(req.body, k)) body[k] = req.body[k];
+        body.stream = false;
+        var nr = await Native.NativeHttp.request(req.url, req.headers, body);
+        if (!nr) throw inner;
+        if (!nr.ok) throw new ApiError(nr.status, pickServerMessage(nr.text), nr.text);
+        var parsed;
+        try { parsed = JSON.parse(nr.text); } catch (e) { throw inner; }
+        var full = extractFull(parsed, protocol);
+        if (full.think) botMsg.reasoning = full.think;
+        botMsg.content = full.text;
+        botMsg.noStream = true;
+        paint();
+      }
 
       if (!botMsg.content && !botMsg.reasoning) {
-        botMsg.content = '（服务商没有返回内容，可能是模型名不对或账户额度已用尽。）';
+        botMsg.content = t('err.empty');
         node.dataset.error = 'true';
       }
     } catch (err) {
       if (err && err.name === 'AbortError') {
-        if (!botMsg.content) botMsg.content = '（已停止）';
-        else botMsg.content += '\n\n（已停止）';
+        if (!botMsg.content) botMsg.content = t('common.stopped');
+        else botMsg.content += '\n\n' + t('common.stopped');
       } else {
         botMsg.content = errorText(err);
         node.dataset.error = 'true';
@@ -1718,6 +1864,12 @@
     } finally {
       delete node.dataset.streaming;
       bodyEl.innerHTML = mdToHtml(botMsg.content || '');
+      if (botMsg.noStream) {
+        var note = document.createElement('p');
+        note.className = 'no-stream-note';
+        note.textContent = t('effort.nativeNote');
+        node.appendChild(note);
+      }
       ensureReasoning(node, botMsg);
       state.controller = null;
       setBusy(false);
@@ -1747,9 +1899,9 @@
     if (!text && !state.attachments.length) return;
 
     var prof = activeProfile();
-    if (!prof) { openSettings(); openProfileForm(''); toast('先加一条密钥'); return; }
-    if (!prof.apiKey) { openSettings(); toast('这条密钥没填 Key'); return; }
-    if (!prof.model) { openSettings(); toast('这条密钥没指定模型'); return; }
+    if (!prof) { openSettings('keys'); openProfileForm(''); toast(t('toast.needKeyFirst')); return; }
+    if (!prof.apiKey) { openSettings('keys'); toast(t('toast.needKeyField')); return; }
+    if (!prof.model) { openSettings('keys'); toast(t('toast.needModel')); return; }
     if (!state.conv) newConv();
 
     var conv = state.conv;
@@ -1767,7 +1919,7 @@
     var botMsg = {
       role: 'assistant', content: '', model: prof.model, at: Date.now(),
       skills: skillNames.length ? skillNames : null,
-      effort: currentEffort().name
+      effort: t(currentEffort().nameKey)
     };
     conv.messages.push(botMsg);
     conv.model = prof.model;
@@ -1795,7 +1947,7 @@
     var botMsg = {
       role: 'assistant', content: '', model: prof ? prof.model : '', at: Date.now(),
       skills: skillNames.length ? skillNames : null,
-      effort: currentEffort().name
+      effort: t(currentEffort().nameKey)
     };
     var history = conv.messages.slice();
     conv.messages.push(botMsg);
@@ -1820,19 +1972,62 @@
   function openDrawer() { renderConvList(); setPanel(el.drawer, true); }
   function closeDrawer() { setPanel(el.drawer, false); }
 
+  /* ---------- 设置（分类页签） ---------- */
+
+  function renderTabs() {
+    var tabs = el.settingsTabs.querySelectorAll('[data-tab]');
+    for (var i = 0; i < tabs.length; i++) {
+      var on = tabs[i].dataset.tab === state.settingsTab;
+      tabs[i].dataset.on = on ? 'true' : 'false';
+      tabs[i].setAttribute('aria-selected', on ? 'true' : 'false');
+    }
+    var panes = el.settings.querySelectorAll('[data-pane]');
+    for (var j = 0; j < panes.length; j++) {
+      panes[j].hidden = panes[j].dataset.pane !== state.settingsTab;
+    }
+  }
+
+  function setSettingsTab(name) {
+    state.settingsTab = name || 'keys';
+    renderTabs();
+    el.settings.querySelector('.sheet-body').scrollTop = 0;
+  }
+
+  function renderChangelog() {
+    if (!el.changelog) return;
+    var lang = I18N.getLang() === 'en' ? 'en' : 'zh';
+    var html = '';
+    for (var i = 0; i < CHANGELOG.length; i++) {
+      var item = CHANGELOG[i];
+      var lines = item[lang] || item.zh || [];
+      html += '<div class="cl-item">' +
+        '<div class="cl-head"><span class="cl-ver">' + esc(item.v) + '</span>' +
+        '<span class="cl-date">' + esc(item.date) + '</span></div>' +
+        '<ul class="cl-list">';
+      for (var j = 0; j < lines.length; j++) {
+        html += '<li>' + esc(lines[j]) + '</li>';
+      }
+      html += '</ul></div>';
+    }
+    el.changelog.innerHTML = html;
+  }
+
   function fillSettingsForm() {
     renderProfileList();
-    if (!el.profileForm.hidden) {
-      // 保持正在编辑的内容不动
-    } else if (!state.profiles.length) {
+    if (el.profileForm.hidden && !state.profiles.length) {
+      /* 第一次用、还没有密钥时直接把新增表单摊开，省一次点击 */
       openProfileForm('');
     }
     fillPrefsForm();
+    renderChangelog();
+    if (el.appVersion) el.appVersion.textContent = APP_VERSION;
+    renderSecureNote();
   }
 
-  function openSettings() {
+  function openSettings(tab) {
     closeDrawer();
     fillSettingsForm();
+    setSettingsTab(tab || state.settingsTab || 'keys');
     setPanel(el.settings, true);
   }
 
@@ -1850,6 +2045,37 @@
   function closeSkills() {
     setPanel(el.skills, false);
     closeSkillForm();
+  }
+
+  /* 切换界面语言：静态节点刷一遍，动态内容重新渲染 */
+  function applyLanguage(lang, silent) {
+    var chosen = I18N.setLang(lang);
+    state.prefs.lang = chosen;
+    savePrefs();
+    I18N.applyI18n(document);
+    document.title = t('app.name') + ' · ' + t('app.tagline');
+    renderTitle();
+    renderHint();
+    renderEmpty();
+    renderConvList();
+    renderProfileList();
+    renderSkillList();
+    renderPaletteList();
+    renderLangList();
+    renderChangelog();
+    renderSampleChips();
+    renderCtx();
+    if (el.profileForm && !el.profileForm.hidden) {
+      el.profileFormTitle.textContent = state.editingProfileId ? t('keys.editTitle') : t('keys.addTitle');
+      el.btnPfToggleKey.textContent = el.pfKey.type === 'text' ? t('keys.hide') : t('keys.show');
+      el.btnPfFetch.textContent = t('keys.fetch');
+      onProfileProviderChange(true);
+    }
+    if (el.skillForm && !el.skillForm.hidden) {
+      el.skillFormTitle.textContent = state.editingSkillId ? t('skills.editTitle') : t('skills.addTitle');
+    }
+    setBusy(state.streaming);
+    if (!silent) toast(t('lang.switched'));
   }
 
   /* ---------- 导入导出 ---------- */
@@ -1874,9 +2100,9 @@
   function exportAll() {
     persistNow();
     var payload = Store.dumpAll();
-    if (!payload.conversations.length) { toast('还没有可导出的对话'); return; }
-    download('钥匙备份-' + stamp() + '.json', JSON.stringify(payload, null, 2), 'application/json');
-    toast('已导出 ' + payload.conversations.length + ' 条对话（不含密钥）');
+    if (!payload.conversations.length) { toast(t('toast.nothingToExport')); return; }
+    download('keyapp-backup-' + stamp() + '.json', JSON.stringify(payload, null, 2), 'application/json');
+    toast(t('toast.exported', { n: payload.conversations.length }));
   }
 
   function importFile(file) {
@@ -1887,9 +2113,9 @@
         var n = Store.importAll(payload);
         state.index = Store.loadIndex();
         renderConvList();
-        toast(n ? ('导入了 ' + n + ' 条对话') : '没有新对话可导入');
+        toast(n ? t('toast.imported', { n: n }) : t('toast.importNone'));
       } catch (e) {
-        toast('文件读不出来，确认是备份 JSON', 4000);
+        toast(t('toast.importFail'), 4000);
       }
     };
     reader.readAsText(file);
@@ -1912,7 +2138,7 @@
       lines.push('', m.content || '', '');
     }
     download((conv.title || '对话').replace(/[\\/:*?"<>|]/g, '_') + '.md', lines.join('\n'), 'text/markdown;charset=utf-8');
-    toast('已导出 Markdown');
+    toast(t('toast.mdExported'));
   }
 
   /* ---------- 输入框 ---------- */
@@ -1952,7 +2178,7 @@
   function toggleMic() {
     var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) {
-      toast('这个浏览器不支持语音输入。Chrome 能用，Safari 和 Firefox 不行。', 4000);
+      toast(t('toast.micUnsupported'), 4000);
       return;
     }
     if (recog) {
@@ -1962,7 +2188,7 @@
     try {
       recog = new SR();
     } catch (e) {
-      toast('麦克风没启动起来。', 3000);
+      toast(t('toast.micFail'), 3000);
       return;
     }
     var base = el.input.value;
@@ -1976,7 +2202,7 @@
       autoGrow();
     };
     recog.onerror = function () {
-      toast('语音识别中断了，检查是不是拦了麦克风权限。', 4000);
+      toast(t('toast.micError'), 4000);
     };
     recog.onend = function () {
       recog = null;
@@ -1987,9 +2213,9 @@
     el.btnMic.setAttribute('aria-label', '停止录音');
     try {
       recog.start();
-      toast('在听了，说完再点一次麦克风', 2400);
+      toast(t('toast.micListening'), 2400);
     } catch (e) {
-      toast('麦克风没启动起来。', 3000);
+      toast(t('toast.micFail'), 3000);
       recog = null;
       el.btnMic.classList.remove('recording');
     }
@@ -2010,8 +2236,8 @@
     });
     el.btnTemp.addEventListener('click', toggleTemp);
     el.btnSaveTemp.addEventListener('click', saveTempConv);
-    el.btnKeyIcon.addEventListener('click', function () { closePops(); openSettings(); });
-    el.btnModel.addEventListener('click', function () { closePops(); openSettings(); });
+    el.btnSettings2.addEventListener('click', function () { closeDrawer(); openSettings('keys'); });
+    el.btnModel.addEventListener('click', function () { closePops(); openSettings('keys'); });
     el.btnSkillIcon.addEventListener('click', function () { closePops(); openSkills(); });
     el.btnSkills2.addEventListener('click', openSkills);
 
@@ -2029,6 +2255,7 @@
       else if (act === 'drawer') openDrawer();
       else if (act === 'import') el.fileImport.click();
       else if (act === 'export') exportAll();
+      else if (act === 'save-temp') saveTempConv();
     });
 
     el.pickImages.addEventListener('change', function () {
@@ -2093,7 +2320,7 @@
     el.emptyState.addEventListener('click', function (e) {
       var t = e.target;
       if (!t.dataset) return;
-      if (t.dataset.act === 'open-keys') { openSettings(); return; }
+      if (t.dataset.act === 'open-keys') { openSettings('keys'); return; }
       if (t.dataset.act === 'open-skills') { openSkills(); return; }
       if (t.dataset.fill) {
         el.input.value = t.dataset.fill;
@@ -2134,7 +2361,7 @@
       if (t.dataset.activate) {
         if (t.dataset.activate === state.activeId) { openProfileForm(t.dataset.activate); return; }
         setActiveProfile(t.dataset.activate);
-        toast('已切换');
+        toast(t('toast.switched'));
       }
     });
 
@@ -2145,7 +2372,7 @@
     el.btnPfToggleKey.addEventListener('click', function () {
       var showing = el.pfKey.type === 'text';
       el.pfKey.type = showing ? 'password' : 'text';
-      el.btnPfToggleKey.textContent = showing ? '显示' : '隐藏';
+      el.btnPfToggleKey.textContent = showing ? t('keys.show') : t('keys.hide');
     });
     el.btnPfFetch.addEventListener('click', fetchModelList);
 
@@ -2169,10 +2396,26 @@
       if (idx == null) return;
       var s = SKILL_SAMPLES[Number(idx)];
       if (!s) return;
-      el.sfName.value = s.name;
-      el.sfHint.value = s.hint;
-      el.sfBody.value = s.body;
+      var en = I18N.getLang() === 'en';
+      el.sfName.value = en ? (s.nameEn || s.name) : s.name;
+      el.sfHint.value = en ? (s.hintEn || s.hint) : s.hint;
+      el.sfBody.value = en ? (s.bodyEn || s.body) : s.body;
       el.sfName.focus();
+    });
+
+    /* 设置页签 */
+    el.settingsTabs.addEventListener('click', function (e) {
+      var b = e.target.closest ? e.target.closest('[data-tab]') : null;
+      if (!b) return;
+      setSettingsTab(b.dataset.tab);
+    });
+
+    /* 语言 */
+    el.langList.addEventListener('click', function (e) {
+      var b = e.target.closest ? e.target.closest('[data-lang]') : null;
+      if (!b) return;
+      if (b.dataset.lang === I18N.getLang()) return;
+      applyLanguage(b.dataset.lang, false);
     });
 
     /* 偏好 */
@@ -2185,8 +2428,8 @@
       if (!b) return;
       state.prefs.palette = b.dataset.pal;
       if (b.dataset.pal === 'custom') {
-        el.fAccent.value = state.prefs.customAccent || '#D8A25C';
-        el.fBg.value = state.prefs.customBg || '#0F1613';
+        el.fAccent.value = state.prefs.customAccent || '#2E7BD6';
+        el.fBg.value = state.prefs.customBg || '#F2F8FF';
       }
       savePrefs();
       applyTheme();
@@ -2214,19 +2457,27 @@
       applyTheme();
     });
 
-    el.btnSaveSettings.addEventListener('click', function () {
-      readPrefsForm();
-      closeSettings();
-      renderHint();
-      renderEmpty();
-      toast('已保存');
+    el.fSystem.addEventListener('input', function () {
+      state.prefs.systemPrompt = el.fSystem.value;
+      savePrefs();
     });
+
+    el.fMax.addEventListener('input', function () {
+      state.prefs.maxTokens = Number(el.fMax.value) || 2048;
+      savePrefs();
+    });
+
+    el.fTemp.addEventListener('change', function () {
+      state.prefs.temperature = Number(el.fTemp.value);
+      savePrefs();
+    });
+
     el.btnCloseSettings.addEventListener('click', closeSettings);
     el.btnCloseSkills.addEventListener('click', closeSkills);
 
     el.btnClearKeys.addEventListener('click', function () {
-      if (!state.profiles.length) { toast('本来就没有密钥'); return; }
-      if (!window.confirm('删掉全部 ' + state.profiles.length + ' 条密钥？这会一并清空正在用的这条。')) return;
+      if (!state.profiles.length) { toast(t('keys.empty')); return; }
+      if (!window.confirm(t('keys.clearAllAsk', { n: state.profiles.length }))) return;
       state.profiles = [];
       state.activeId = '';
       saveProfiles();
@@ -2236,7 +2487,7 @@
       renderHint();
       renderEmpty();
       openProfileForm('');
-      toast('密钥已清空');
+      toast(t('toast.deleted'));
     });
 
     el.btnExportAll.addEventListener('click', exportAll);
@@ -2282,7 +2533,14 @@
     el.btnModel = $('btnModel');
     el.btnTemp = $('btnTemp');
     el.btnSaveTemp = $('btnSaveTemp');
-    el.btnKeyIcon = $('btnKeyIcon');
+    el.btnSettings2 = $('btnSettings2');
+    el.menuSaveTemp = $('menuSaveTemp');
+    el.settingsTabs = $('settingsTabs');
+    el.langList = $('langList');
+    el.changelog = $('changelog');
+    el.appVersion = $('appVersion');
+    el.secureNote = $('secureNote');
+    el.secureNote2 = $('secureNote2');
     el.btnSkillIcon = $('btnSkillIcon');
     el.skillBadge = $('skillBadge');
     el.btnMore = $('btnMore');
@@ -2336,7 +2594,6 @@
     el.tempVal = $('tempVal');
     el.fMax = $('fMax');
     el.fTheme = $('fTheme');
-    el.btnSaveSettings = $('btnSaveSettings');
     el.btnCloseSettings = $('btnCloseSettings');
     el.btnClearKeys = $('btnClearKeys');
 
@@ -2358,7 +2615,14 @@
 
   function init() {
     cacheDom();
-    loadPrefs();    applyTheme();
+    loadPrefs();
+
+    /* 语言要在渲染任何文字之前定下来 */
+    I18N.setLang(state.prefs.lang || 'zh');
+    I18N.applyI18n(document);
+    document.title = t('app.name') + ' · ' + t('app.tagline');
+    applyTheme();
+
     state.profiles = Store.loadProfiles();
     state.activeId = Store.loadActiveProfile();
     state.skills = Store.loadSkills();
@@ -2396,6 +2660,9 @@
     setPanel(el.skills, false);
     setBusy(false);
     renderEffort();
+    renderTabs();
+    renderChangelog();
+    if (el.appVersion) el.appVersion.textContent = APP_VERSION;
     registerSW();
 
     /* 提示条要始终浮在输入区上方，随输入区高度变化 */
@@ -2408,10 +2675,29 @@
       syncH();
     }
 
+    /* 数据升级：只补不删；密钥加密成功才会删掉明文副本 */
+    Promise.resolve(Store.migrate()).then(function (r) {
+      if (!r) return;
+      state.profiles = Store.loadProfiles();
+      state.secureOn = Store.usesSecureProfiles() || (typeof Native !== 'undefined' && Native.SecureStore.isAvailable());
+      if (r.done.indexOf('encrypted-keys') >= 0) toast(t('toast.secureMigrated'), 4000);
+      renderProfileList();
+      renderHint();
+      renderSecureNote();
+    }).catch(function () { /* 迁移失败就维持原样，不动数据 */ });
+
+    /* 加密存储可用性（只用于界面提示） */
+    if (typeof Native !== 'undefined' && Native.SecureStore.isNative) {
+      Promise.resolve(Native.SecureStore.check()).then(function (avail) {
+        state.secureOn = !!avail;
+        renderSecureNote();
+      });
+    }
+
     if (!Store.isPersistent()) {
-      toast('这个浏览器不允许网页保存数据，密钥和对话只存在内存里。请用 http 地址打开，或把页面部署到静态托管。', 9000);
+      toast(t('toast.storageWarn'), 9000);
     } else if (!state.profiles.length) {
-      setTimeout(function () { openSettings(); }, 400);
+      setTimeout(function () { openSettings('keys'); }, 400);
     }
   }
 

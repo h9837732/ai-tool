@@ -1,7 +1,15 @@
 name: Release APK
 
-# 打 v* 标签时出包并挂到 Release，方便直接下载安装。
-#   git tag v1.0.0 && git push origin v1.0.0
+# 打 v* 标签时出签名后的 release APK，并挂到 Release 页面。
+#   git tag v1.1.0 && git push origin v1.1.0
+#
+# 签名需要 4 个仓库 Secrets（Settings → Secrets and variables → Actions）：
+#   KEYSTORE_BASE64    keystore 文件转成的 base64
+#   KEYSTORE_PASSWORD  密钥库口令
+#   KEY_ALIAS          密钥别名
+#   KEY_PASSWORD       密钥口令
+#
+# 没有配 Secrets 时会退回出未签名的 release 包，不阻断流程。
 
 on:
   push:
@@ -54,7 +62,75 @@ jobs:
           key: gradle-${{ runner.os }}-${{ hashFiles('android/**/*.gradle', 'android/gradle/wrapper/gradle-wrapper.properties') }}
           restore-keys: gradle-${{ runner.os }}-
 
-      - name: 编译 release APK（未签名）
+      - name: 还原签名密钥
+        if: ${{ env.KEYSTORE_BASE64 != '' }}
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > android/keyapp-release.keystore
+          ls -l android/keyapp-release.keystore
+
+      - name: 写入签名配置
+        if: ${{ env.KEYSTORE_BASE64 != '' }}
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          cat > android/keystore.properties <<EOF
+          storeFile=keyapp-release.keystore
+          storePassword=${KEYSTORE_PASSWORD}
+          keyAlias=${KEY_ALIAS}
+          keyPassword=${KEY_PASSWORD}
+          EOF
+
+      - name: 打开签名的构建配置
+        if: ${{ env.KEYSTORE_BASE64 != '' }}
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          python3 - <<'PY'
+          import re, pathlib
+          p = pathlib.Path('android/app/build.gradle')
+          s = p.read_text()
+
+          # 读 keystore.properties
+          if 'keystore.properties' not in s:
+              s = s.replace(
+                  "apply plugin: 'com.android.application'",
+                  "apply plugin: 'com.android.application'\n\n"
+                  "def keystorePropsFile = rootProject.file('keystore.properties')\n"
+                  "def keystoreProps = new Properties()\n"
+                  "if (keystorePropsFile.exists()) { keystorePropsFile.withInputStream { keystoreProps.load(it) } }\n"
+              )
+
+          # 声明 signingConfigs
+          if 'signingConfigs' not in s:
+              s = s.replace(
+                  '    buildTypes {',
+                  "    signingConfigs {\n"
+                  "        release {\n"
+                  "            if (keystorePropsFile.exists()) {\n"
+                  "                storeFile rootProject.file(keystoreProps['storeFile'])\n"
+                  "                storePassword keystoreProps['storePassword']\n"
+                  "                keyAlias keystoreProps['keyAlias']\n"
+                  "                keyPassword keystoreProps['keyPassword']\n"
+                  "            }\n"
+                  "        }\n"
+                  "    }\n"
+                  "    buildTypes {"
+              )
+
+          # release 用上签名
+          s = re.sub(r'release\s*\{\s*\n(\s*)minifyEnabled false',
+                     lambda m: 'release {\n' + m.group(1) + "if (keystorePropsFile.exists()) { signingConfig signingConfigs.release }\n" + m.group(1) + 'minifyEnabled false',
+                     s, count=1)
+          p.write_text(s)
+          print(s[:1200])
+          PY
+
+      - name: 编译 release APK
         working-directory: android
         run: |
           chmod +x gradlew
@@ -77,5 +153,8 @@ jobs:
           body: |
             钥匙 · 自带 API Key 的 AI 对话客户端
 
-            下载下面的 APK 传到手机安装（需要允许「安装未知来源应用」）。
-            这是未签名的 release 包；装不上就用 Build APK 流程出的 debug 包。
+            下载 APK 传到手机安装（需允许「安装未知来源应用」）。
+
+            - 密钥用系统钥匙串加密存储
+            - 支持中英文界面
+            - 智谱、混元等不返回跨域头的服务商已可在 App 内使用
