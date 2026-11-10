@@ -7,6 +7,22 @@
 
   var CHANGELOG = [
     {
+      v: '1.3.2',
+      date: '2026-11',
+      zh: [
+        '新增电脑端软件：一个窗口搞定配对码、地址、附近设备、日志',
+        '支持打包成单个 exe，双击即用，可设开机自启',
+        '同一台电脑上重复打开不会起第二个服务',
+        '地址只显示手机要用的那个主网卡，虚拟网卡收起来了'
+      ],
+      en: [
+        'New desktop app: pairing code, addresses, nearby devices and logs in one window',
+        'Packages into a single exe, double-click to run, optional launch at login',
+        'Opening it twice does not start a second server',
+        'Only the primary network adapter is shown; virtual adapters are tucked away'
+      ]
+    },
+    {
       v: '1.3.1',
       date: '2026-11',
       zh: [
