@@ -1,5 +1,14 @@
 apply plugin: 'com.android.application'
 
+/* 固定签名：从仓库根目录的 keystore.properties 读（CI 里由 Secrets 生成，本地可自己建）。
+   文件不存在时退回 Android 默认的 debug 签名，不影响本地开发。 */
+def keystorePropsFile = rootProject.file('keystore.properties')
+def keystoreProps = new Properties()
+if (keystorePropsFile.exists()) {
+    keystorePropsFile.withInputStream { keystoreProps.load(it) }
+}
+def hasStableKey = keystorePropsFile.exists() && keystoreProps['storeFile']
+
 android {
     namespace = "com.keyapp.chat"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -16,8 +25,31 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+
+    signingConfigs {
+        stable {
+            if (hasStableKey) {
+                storeFile rootProject.file(keystoreProps['storeFile'])
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+                /* CI 恢复出来的 .keystore 实际是 PKCS12，显式声明避免被当 JKS 读 */
+                storeType 'PKCS12'
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            /* debug 包也用同一把密钥签，这样 debug 与 release 可以互相覆盖升级 */
+            if (hasStableKey) {
+                signingConfig signingConfigs.stable
+            }
+        }
         release {
+            if (hasStableKey) {
+                signingConfig signingConfigs.stable
+            }
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }

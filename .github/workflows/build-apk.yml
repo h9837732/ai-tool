@@ -3,6 +3,10 @@ name: Build APK
 # 日常出包：推到 main / master 且改到前端或原生工程时自动编译。
 # 只改 README、.gitignore 这类文件不会触发，省编译额度。
 # 也可以手动 Actions → Run workflow。
+#
+# 签名：如果仓库配了 4 个 Secrets（KEYSTORE_BASE64 / KEYSTORE_PASSWORD /
+# KEY_ALIAS / KEY_PASSWORD），所有包都用这把固定密钥签，升级才能覆盖安装。
+# 没配就退回 Android 默认的 debug 签名（每次构建签名都不同）。
 
 on:
   workflow_dispatch:
@@ -61,13 +65,26 @@ jobs:
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
           SDKM=$(ls -d "$SDK"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1)
-          echo "sdkmanager = $SDKM"
-          "$SDKM" --version
           yes | "$SDKM" --licenses > /dev/null 2>&1 || true
           "$SDKM" --install "platform-tools" "platforms;android-36" 2>&1 | tail -3 || true
           echo "sdk.dir=$SDK" > android/local.properties
-          echo "已安装组件："
-          "$SDKM" --list_installed 2>/dev/null | head -20
+
+      - name: 恢复签名密钥
+        if: ${{ env.KEYSTORE_BASE64 != '' }}
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > android/keyapp-release.keystore
+          cat > android/keystore.properties <<EOF
+          storeFile=keyapp-release.keystore
+          storePassword=${KEYSTORE_PASSWORD}
+          keyAlias=${KEY_ALIAS}
+          keyPassword=${KEY_PASSWORD}
+          EOF
+          echo "签名密钥已就位：$(stat -c%s android/keyapp-release.keystore) 字节"
 
       - name: 缓存 Gradle
         uses: actions/cache@v4
@@ -78,19 +95,33 @@ jobs:
           key: gradle-${{ runner.os }}-${{ hashFiles('android/**/*.gradle', 'android/gradle/wrapper/gradle-wrapper.properties') }}
           restore-keys: gradle-${{ runner.os }}-
 
-      - name: 编译 debug APK
+      - name: 编译
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon --stacktrace
+          ./gradlew assembleDebug assembleRelease --no-daemon --stacktrace
+
+      - name: 校验产物签名指纹
+        run: |
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          SDK=${ANDROID_HOME:-/usr/local/lib/android/sdk}
+          BT=$(ls -d "$SDK"/build-tools/*/ 2>/dev/null | sort -V | tail -1)
+          echo "build-tools: $BT"
+          if [ -x "${BT}apksigner" ]; then
+            "${BT}apksigner" verify --print-certs "$APK" | grep -i "SHA-256" || true
+          else
+            echo "(apksigner 不可用，跳过)"
+          fi
 
       - name: 显示产物
-        run: ls -lh android/app/build/outputs/apk/debug/
+        run: ls -lh android/app/build/outputs/apk/debug/ android/app/build/outputs/apk/release/ 2>/dev/null
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
-          name: keyapp-debug-apk
-          path: android/app/build/outputs/apk/debug/*.apk
+          name: keyapp-apk
+          path: |
+            android/app/build/outputs/apk/debug/*.apk
+            android/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
           retention-days: 30
