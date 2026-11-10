@@ -3,15 +3,19 @@
 
 双击就进聊天。内部做三件事：
   1. 起一个本地 Web 服务（托管内嵌的聊天界面）
-  2. 用 Edge / Chrome 的「应用模式」把界面装进一个独立窗口
-     —— 没有地址栏、没有标签页，看着就是一个桌面软件
+  2. 用 pywebview 把界面装进一个内嵌 WebView2 的窗口
+     —— 窗口属于本进程，不起浏览器、没有地址栏
   3. 组播广播，让手机 App 自动发现这台电脑
 
 关掉那个窗口，服务和进程一起退出。
 
-为什么不用 WebView 内嵌：本机 Python 环境的 PyQt5 装在不含纯 ASCII 的
-用户目录下，PyInstaller 的 Qt 钩子读不了这个路径，打包会失败。
-应用模式这条路零依赖、必然可用，界面效果一样干净。
+窗口技术选型：pywebview 的 edgechromium 后端，直接创建 WebView2 控件。
+WebView2 运行时是 Windows 10/11 系统自带的，和 Edge 浏览器本体互不相干——
+不启动 msedge.exe、不占浏览器配置文件、任务管理器里看不到浏览器进程。
+（早先用的是 msedge --app 应用模式，虽然看着像独立软件，但本质还是开浏览器。）
+
+兜底链：pywebview 不可用 → Chrome/Edge 应用模式 → 系统默认浏览器。
+
 
 前端代码内嵌在文件末尾的 ASSETS_B64 里（由 embed_assets.py 生成），
 所以 --onefile 打出来的 exe 不需要任何外部文件。
@@ -66,6 +70,8 @@ FILE_DIR = os.path.join(DATA_DIR, "files")
 STATE_FILE = os.path.join(DATA_DIR, "state.json")
 TOKENS_FILE = os.path.join(DATA_DIR, "tokens.json")
 PROFILE_DIR = os.path.join(DATA_DIR, "window-profile")
+# 内嵌 WebView2 的 localStorage / IndexedDB 落在这个目录，换 exe 也不丢
+WEBVIEW_STORAGE = os.path.join(DATA_DIR, "webview")
 
 
 def ensure_dirs():
@@ -721,21 +727,150 @@ def start_server(port, assets, www_dir):
 
 # ---------------------------------------------------------------- 应用窗口
 #
-# 用 Chromium 系浏览器的「应用模式」承载界面：
-#   msedge.exe --app=http://127.0.0.1:PORT
-# 效果是一个没有地址栏、没有标签页的独立窗口，标题取页面标题。
-# 比内嵌 WebView 省事得多，也不用担心 Qt / 非 ASCII 路径。
+# 首选：pywebview 的 edgechromium 后端 → 内嵌 WebView2 控件。
+#       窗口属于本进程，不起浏览器，localStorage 落在 WEBVIEW_STORAGE。
+# 次选：Chrome/Edge 的 --app 应用模式（看着像独立软件，但仍是浏览器进程）。
+# 末选：系统默认浏览器 + 一个能看配对码的 tk 小窗。
 
 BROWSER_CANDIDATES = [
-    r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe",
-    r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe",
     r"%ProgramFiles%\Google\Chrome\Application\chrome.exe",
     r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe",
     r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe",
+    r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe",
+    r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe",
 ]
 
 # 窗口标题里出现这个就认为是我们的界面
 WINDOW_TITLE_HINT = "钥匙"
+
+WEBVIEW_STATE = {"checked": False, "ok": False, "why": ""}
+
+
+class _Bridge:
+    """暴露给页面的极小接口。目前只有一个用途：
+    回答里的外链点开时丢给系统默认浏览器，别把整个应用导航走。"""
+
+    def open_external(self, url):
+        try:
+            if isinstance(url, str) and url.split(":", 1)[0].lower() in ("http", "https", "mailto"):
+                webbrowser.open(url)
+                return True
+        except Exception:
+            pass
+        return False
+
+
+# 页内装一层外链兵，只拦 http(s)/mailto，站内跳转不管。
+_LINK_GUARD_JS = """
+(function () {
+  if (window.__keyappLinkGuard) return;
+  window.__keyappLinkGuard = true;
+  document.addEventListener('click', function (ev) {
+    var a = ev.target && ev.target.closest ? ev.target.closest('a[href]') : null;
+    if (!a) return;
+    var href = a.getAttribute('href') || '';
+    if (!/^(https?:|mailto:)/i.test(href)) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    try {
+      if (window.pywebview && window.pywebview.api && window.pywebview.api.open_external) {
+        window.pywebview.api.open_external(href);
+      } else {
+        window.open(href, '_blank');
+      }
+    } catch (e) {}
+  }, true);
+})();
+"""
+
+
+def webview_available():
+    """能不能用内嵌 WebView2。结果缓存，只探测一次。"""
+    if WEBVIEW_STATE["checked"]:
+        return WEBVIEW_STATE["ok"]
+
+    WEBVIEW_STATE["checked"] = True
+    try:
+        import webview  # noqa: F401
+    except Exception as e:
+        WEBVIEW_STATE["why"] = "pywebview 导入失败: %s" % e
+        return False
+
+    # 后端要能实例化（缺 pythonnet / WebView2 DLL 时这里会报）
+    try:
+        from webview.platforms import edgechromium  # noqa: F401
+    except Exception as e:
+        WEBVIEW_STATE["why"] = "WebView2 后端不可用: %s" % e
+        return False
+
+    WEBVIEW_STATE["ok"] = True
+    return True
+
+
+def run_embedded_window(url, width=1040, height=800):
+    """内嵌 WebView2 起窗口。阻塞到窗口关闭。
+    返回 True = 用户正常关窗；False = 起不来（调用方该走兜底）。"""
+    try:
+        import webview
+    except Exception as e:
+        HUB.log("内嵌窗口不可用: %s" % e)
+        return False
+
+    try:
+        os.makedirs(WEBVIEW_STORAGE, exist_ok=True)
+    except Exception:
+        pass
+
+    try:
+        window = webview.create_window(
+            APP_NAME,
+            url,
+            width=width,
+            height=height,
+            min_size=(720, 520),
+            text_select=True,
+            confirm_close=False,
+            js_api=_Bridge(),
+        )
+    except Exception as e:
+        HUB.log("创建窗口失败: %s" % e)
+        return False
+
+    opened = {"ok": False}
+
+    def _on_loaded():
+        if not opened["ok"]:
+            opened["ok"] = True
+            HUB.log("窗口已就绪（内嵌 WebView2），关掉它就会退出")
+        # 外链交给系统浏览器，别把应用本身导航走
+        try:
+            window.evaluate_js(_LINK_GUARD_JS)
+        except Exception:
+            pass
+
+    try:
+        window.events.loaded += _on_loaded
+    except Exception:
+        pass
+
+    try:
+        webview.start(
+            gui="edgechromium",          # 明确指定，别让它去试 Qt/GTK
+            private_mode=False,          # 要持久化 localStorage（密钥、会话）
+            storage_path=WEBVIEW_STORAGE,
+            debug=False,
+        )
+    except Exception as e:
+        HUB.log("内嵌窗口启动失败: %s" % e)
+        return False
+
+    if not opened["ok"]:
+        # start() 立刻返回、连页面都没加载 —— 当作启动失败去走兜底
+        HUB.log("内嵌窗口没加载出页面")
+        return False
+
+    HUB.log("窗口已关闭，正在退出")
+    return True
 
 
 def find_browser():
@@ -745,7 +880,7 @@ def find_browser():
             continue
         if os.path.isfile(p):
             return p
-    for name in ("msedge.exe", "chrome.exe"):
+    for name in ("chrome.exe", "msedge.exe"):
         p = shutil.which(name)
         if p:
             return p
@@ -800,7 +935,7 @@ def app_window_exists():
 
 
 def launch_app_window(url, width=1040, height=800):
-    """返回浏览器进程（可能很快就自己退出了，别用它判断寿命）。"""
+    """浏览器应用模式（兜底用）。返回进程，可能很快就自己退出。"""
     exe = find_browser()
     if not exe:
         return None
@@ -845,7 +980,7 @@ def watch_window(url):
         if app_window_exists():
             idle = 0
             continue
-        # 关窗后给 3 秒缓冲：Edge 有时会在换 tab 时短暂消失
+        # 关窗后给 3 秒缓冲：浏览器有时会在换 tab 时短暂消失
         idle += 1
         if idle >= 2:
             HUB.log("窗口已关闭，正在退出")
@@ -853,16 +988,16 @@ def watch_window(url):
 
 
 def fallback_window(url):
-    """没有 Edge/Chrome 时的兜底：默认浏览器 + 一个能看配对码的小窗。"""
+    """最后兜底：默认浏览器 + 一个能看配对码的小窗。"""
     import tkinter as tk
 
     primary, _ = local_ips()
     root = tk.Tk()
-    root.title("钥匙 · 电脑端")
+    root.title(APP_NAME + " · 电脑端")
     root.configure(bg="#F2F8FF")
     root.geometry("420x260")
 
-    tk.Label(root, text="钥匙 · 电脑端", bg="#2E7BD6", fg="white",
+    tk.Label(root, text=APP_NAME + " · 电脑端", bg="#2E7BD6", fg="white",
              font=("Microsoft YaHei UI", 12, "bold")).pack(fill="x", ipady=10)
     tk.Label(root, text="配对码", bg="#F2F8FF", fg="#5C6D63",
              font=("Microsoft YaHei UI", 9)).pack(pady=(14, 0))
@@ -870,7 +1005,7 @@ def fallback_window(url):
              font=("Consolas", 26, "bold")).pack()
     tk.Label(root, text="手机访问  http://%s:%d" % (primary, HUB.port),
              bg="#F2F8FF", fg="#17211C", font=("Consolas", 9)).pack(pady=(6, 2))
-    tk.Label(root, text="没找到 Edge 或 Chrome，界面已在默认浏览器打开。\n关掉这个窗口服务就停。",
+    tk.Label(root, text="界面已在默认浏览器打开。\n关掉这个窗口服务就停。",
              bg="#F2F8FF", fg="#5C6D63", font=("Microsoft YaHei UI", 8),
              justify="center").pack(pady=8)
 
@@ -879,6 +1014,23 @@ def fallback_window(url):
               font=("Microsoft YaHei UI", 9), padx=12, pady=4).pack(pady=6)
     webbrowser.open(url)
     root.mainloop()
+
+
+def show_window(url):
+    """按 内嵌 → 浏览器应用模式 → 默认浏览器 的顺序起界面。阻塞到关窗。
+    返回 True 表示窗口正常开过并关掉了。"""
+    if webview_available():
+        if run_embedded_window(url):
+            return True
+        HUB.log("内嵌窗口失败，改用浏览器应用模式")
+
+    win = launch_app_window(url)
+    if win is not None:
+        return watch_window(url)
+
+    HUB.log("没找到可用的浏览器窗口，改用系统默认浏览器")
+    fallback_window(url)
+    return True
 
 
 # ---------------------------------------------------------------- 入口
@@ -890,6 +1042,10 @@ def main():
     # 已经有服务在跑：把窗口带出来就行，不起第二个
     if already_running(DEFAULT_PORT):
         url = "http://127.0.0.1:%d/" % DEFAULT_PORT
+        if webview_available():
+            # 只是把界面挂上去看，关窗不影响那已经在跑的服务
+            run_embedded_window(url)
+            return
         if launch_app_window(url) is None:
             webbrowser.open(url)
         else:
@@ -924,20 +1080,8 @@ def main():
     url = "http://127.0.0.1:%d/" % port
     HUB.log("服务已启动 %s" % url)
 
-    win = launch_app_window(url)
-    if win is None:
-        HUB.log("没找到 Edge / Chrome，改用系统默认浏览器")
-        try:
-            fallback_window(url)
-        finally:
-            disc.stop()
-            srv.shutdown()
-            srv.server_close()
-        return
-
     try:
-        if watch_window(url):
-            pass
+        show_window(url)
     except KeyboardInterrupt:
         pass
     finally:

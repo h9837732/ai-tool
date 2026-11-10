@@ -3,15 +3,19 @@
 
 双击就进聊天。内部做三件事：
   1. 起一个本地 Web 服务（托管内嵌的聊天界面）
-  2. 用 Edge / Chrome 的「应用模式」把界面装进一个独立窗口
-     —— 没有地址栏、没有标签页，看着就是一个桌面软件
+  2. 用 pywebview 把界面装进一个内嵌 WebView2 的窗口
+     —— 窗口属于本进程，不起浏览器、没有地址栏
   3. 组播广播，让手机 App 自动发现这台电脑
 
 关掉那个窗口，服务和进程一起退出。
 
-为什么不用 WebView 内嵌：本机 Python 环境的 PyQt5 装在不含纯 ASCII 的
-用户目录下，PyInstaller 的 Qt 钩子读不了这个路径，打包会失败。
-应用模式这条路零依赖、必然可用，界面效果一样干净。
+窗口技术选型：pywebview 的 edgechromium 后端，直接创建 WebView2 控件。
+WebView2 运行时是 Windows 10/11 系统自带的，和 Edge 浏览器本体互不相干——
+不启动 msedge.exe、不占浏览器配置文件、任务管理器里看不到浏览器进程。
+（早先用的是 msedge --app 应用模式，虽然看着像独立软件，但本质还是开浏览器。）
+
+兜底链：pywebview 不可用 → Chrome/Edge 应用模式 → 系统默认浏览器。
+
 
 前端代码内嵌在文件末尾的 ASSETS_B64 里（由 embed_assets.py 生成），
 所以 --onefile 打出来的 exe 不需要任何外部文件。
@@ -41,7 +45,7 @@ APP_TAG = "keyapp"
 
 # 内嵌的前端资源（zip + base64），由 embed_assets.py 生成
 ASSETS_B64 = (
-    "UEsDBBQAAAAIAFsJa11E3hmyehoAAP9sAAAKAAAAaW5kZXguaHRtbN0923bURrbv+QpNz9sZuu02tnFm2b0WMMMkZ4BhxSR5ltVq"
+    "UEsDBBQAAAAIAAUKa11E3hmyehoAAP9sAAAKAAAAaW5kZXguaHRtbN0923bURrbv+QpNz9sZuu02tnFm2b0WMMMkZ4BhxSR5ltVq"
     "t8bqlkaSjZ2nJglgBxuT4WruJoQQCDZMEjC+hLXO+ZOkpe5+yi+cvatK6tJdbTvnrDncLKmqdtXetWvXvlUx+ruyJllzuixUrZpa"
     "emcUfwiqWJ8cy31SzR89mRPKoiXmrapck8dyqjJZtXJYTRbL8KMmW6IgVUXDlK2x3LRVyY/k3M91EVvMKPIZXTOsnCBpdUuuQ7Uz"
     "StmqjpXlGUWS8+TlgKDUFUsR1bwpiao8VjwguO3yFcUak7QZ2QgAJiPKS5qqGRzs3x8bODZy7FigLqkFsLEJV5lgA/gZU4H6NW1C"
@@ -132,15 +136,15 @@ ASSETS_B64 = (
     "PP+KONsTY3EurGAobjgOA6y+61gcD4TucXjYcu1H6q7GSNyl+84DMLK/bG2tuDvdnmKZ4c5NEdUwTO39+gbeBPFos/nTxcQwCv7v"
     "HCa30sZdCFGxoneyu80y2HbjaSdYPaRCZ1ibG0+jLmDK5Knbp3Os0RIwWuvwXYotuuKUPVI1wlWII2759+52ov8bk2Aa0lju7ybn"
     "jSVOa1JYCtVClFKq6OzyBDOl3gRMh1KfzFArpYo5V5dSqtTKaTCIFyytEhjuaXWY5zm5EsZgAjX66H/VBLoC+e/O/gdQSwMEFAAA"
-    "AAgAWwlrXU/ywW4DAQAAmAEAAAgAAABpY29uLnN2Z21QS07DMBTc5xRPr+s2jk2iFMWR+IhVOERwTGJw7cgxTbkDK3YcgKOx4BbY"
+    "AAgABQprXU/ywW4DAQAAmAEAAAgAAABpY29uLnN2Z21QS07DMBTc5xRPr+s2jk2iFMWR+IhVOERwTGJw7cgxTbkDK3YcgKOx4BbY"
     "JUVCsBhpPJrPk6tp38Nhp83EcfB+PE/TeZ43M9tY16eUEJIGB8JeyfnSHjgSIJBnNALBWS05ql0wtE61a93eSc3x8/X94+UN6wSg"
     "clJ4mFXnB47HzCBVP/jl4UJjFsm90iG4IjdZkTFMj9F+UY01EmHyzj6GtdV1eUHzq5OwXrpp8aNoZaRoR47OPpnul/xglTnpcSOs"
     "COWEliDiJdtQIp4X4jgW9PuUYBtbP0DH8ZayLUQ0rCAQ8NfBshIiGloGclb+48gpRDSMBlIuK1Xa10kV/7tOvgBQSwMEFAAAAAgA"
-    "WwlrXZ7wUG5AAQAAEwIAABQAAABtYW5pZmVzdC53ZWJtYW5pZmVzdK2PMUsDMRiG9/6KcI7Wq0VwcCuCUARxFynp3cddaC45klR6"
+    "BQprXZ7wUG5AAQAAEwIAABQAAABtYW5pZmVzdC53ZWJtYW5pZmVzdK2PMUsDMRiG9/6KcI7Wq0VwcCuCUARxFynp3cddaC45klR6"
     "LQURQYeCIHSo1EWwSJXWrSq6+FckbZ38CyakRRzcHPM+T968aeUQ8hhOwNtC3uflre700PsElcpIj5/n42svbwUZc6EqvzVHQpCB"
     "IKkinFk0PxvqpwEq7ZfRLmRodnX6U6VHN9Pzyex+/PXaccl89KjfuvpiOOv2dP9u2n+Y9l8+jk9cNcUssp3NeG17b7FDYbOjLqjN"
     "/QJhITT8WCV0gQOegkOLdUSmFGc2MldZiCln4BAXBJjCy+Gp+aDARDlYxUEtErzOwkrAKRfWWFnfKW4WN5ygYkjgD0YCzqRJD8wB"
-    "oZZ5WgRWsrkvjyIvbyLSBOt4mGX2rDI3nCQ4goKRVhv2U2ZXXaRcwlJF7fw/tyZY1nCVgqk2zYe5du4bUEsDBBQAAAAIAFsJa130"
+    "oZZ5WgRWsrkvjyIvbyLSBOt4mGX2rDI3nCQ4goKRVhv2U2ZXXaRcwlJF7fw/tyZY1nCVgqk2zYe5du4bUEsDBBQAAAAIAAUKa130"
     "5DbTbgIAANsEAAAFAAAAc3cuanOVVM9rE0EUvu9fMZ52p9TZqxAihBJU6KGYlh7Ew7g7yU6zO7vuTBJLG5CCEqhFxB+IVLyJCNJ6"
     "EIuJ9I+xyebWf8E3O9k0q1Z0LzPzvfe+9703b9ZdQtn7YfbtNBs9H396fT56M340mH45zr4/y4aH56Mnk/3Ts5OD8eB4/PhgejQ0"
     "bj8e7o2ffhwffkCBUolEk8ErFMYeDYNYKnR2sp+9eDd5OQA3tORaXiwAXamt3KyjKrLbbJsmydXuNbsyM9Uajfp6A2x3LIRs4trL"
@@ -149,7 +153,7 @@ ASSETS_B64 = (
     "PKq84K9uuGL18eX1UE/xLlXsfwqC65VOWaiGdOhaGkdcMgItyjHS5KGCPG1tbKMr1aqZEkwimhh0RuqzkCnmtDG+vAdeyEGVhJXy"
     "6J/KazLoz6+1mZFM2X2YR1Mn7DswCRUw8iZy4EgipoLYzxXbN+rrNoYA1UlFZU7QSUMgEKyHNm6v5jGA4IID9iROeYuLnEO/HcVh"
     "wAw2Z0Oui7LhW3iA5t2h2totND36Ovm8Z82vIWUyiYW/yVVgLiIvS6cstwr8ihrNZ4R6cbINSsEKnYsFc3KRM4/fZrQ0nElH6TTL"
-    "OQfGpXnb6S/wmHJ0jgLr/3FIZ/kiWhRg0gU8vx297O6Wncp/Cbx46z8BUEsDBBQAAAAIAFsJa108jjH+wB8AACeeAAALAAAAY3Nz"
+    "OQfGpXnb6S/wmHJ0jgLr/3FIZ/kiWhRg0gU8vx297O6Wncp/Cbx46z8BUEsDBBQAAAAIAAUKa108jjH+wB8AACeeAAALAAAAY3Nz"
     "L2FwcC5jc3PVPW1zHMWZ312l/zBniiqJ0yw7s++rSir4rVK5Su6q+HIpig+zu7PaiXZ3NjOzkpyUqgzYMQYbA8E4gZBYCVx83FmG"
     "BPNijKm6v3LelfSJv3D9Pt093fOyks3FgJF6+vXpp59+3vvZZ4zDtz+aXf298T9fGPs3rh5+8Of5rS9mD66fMAzjYO/hwd7u7Pq7"
     "szff+u7Be4++/vhg9zas8cG3/3vh5fkXn87+fHv/629n928Y/2wcfn3x8Ld/OLjyt9mD+wefvAJK9u9cme19M7tz89E3v53fujy/"
@@ -258,7 +262,7 @@ ASSETS_B64 = (
     "Lp3Y4SfTHjjhMmLPVxi/wchpPG/EpKmnraKWS7z30VLCsYFOLhfPvKRglrhF5FTOxUvBeqylJM1YkomGBn76476kOe/cdHFK/aXk"
     "CVpKI1FLShq1pMF6NNyJEgwf75wnKJdXhNsR2qWomeFraO/cO7j41v5/3f3uwXvzP/z3/A/3Dy9dm939av/WS4iJG/hwW2iYr+A2"
     "VTCxjV1XiCKNslobZOnzSTEPI3ZQwdQP/vr2wZW/zW9dPtj7BLv4YrEEGbUksCXERARHF5BIlcaLPXT5IWBt93f3DvY+fPTlHcjE"
-    "sZdLsVgOuut7wUjvKE01PZyjvsYHVlWTS9qjGY8LkpGCAf4PUEsDBBQAAAAIAFsJa10KJdsWu5YAAFA4AgAJAAAAanMvYXBwLmpz"
+    "sZdLsVgOuut7wUjvKE01PZyjvsYHVlWTS9qjGY8LkpGCAf4PUEsDBBQAAAAIAAUKa10KJdsWu5YAAFA4AgAJAAAAanMvYXBwLmpz"
     "7L1rdxRHlij6fdaa/5Awc7qqmlLpwcNYsuwlgdRmzOuA3DNzaMaTqkpJZZWqqiurJNQe1hK2AfEUtsEYDMbYYNN+COy2jXiZtc78"
     "k7ayVPrUf+HuR2RkRGRkSdieOfesez09qDIz3rHfsWPvzt86q+/eDs5ecf73fad18otg6TNnYP8u5xVv1lm5+rYzsMsJ7j5o3b0e"
     "LH7SnL+/8uXdv/87x3FWHt4NTp2Dp789vtq6e7/5zZvLj843v19ofT4fXLmz8uF3zfO3g4V3gh/nmtfOBadvBpdO/O3xWW6ptXgv"
@@ -773,7 +777,7 @@ ASSETS_B64 = (
     "bmZ962L3FENLV3h4djZXcCNc/YZtL5Zc++Tr7v2Vtcsrq3eurP/mwdqls91TX8Id8ecvt6798e7GB7e5brqaXzZ9e0BBdimsFzNC"
     "KmVZ9RJ/7lr4LuNThkJBn9zhSs2Z+xlFF3kYXc1oo0hcez4zLrCA3kRyy3Tv/WX9hyvdk5+u/eHfQFnqyjWuFCWYsGc+2/j8/e5X"
     "F+k4/c5GqdqlchI4UvjZ07RlHkFNnLwDXHEM7/TsUEkpg2aT8FKYoKHzP9KAVtoIIdOZQr/tnRVnBjGnL6QStKaub4j6KrWOuKZV"
-    "yGMxyYZz1CJ37p8RNM5eVgqj5MGTUzxGDaqUP0XlK/VECX//f1BLAwQUAAAACABbCWtdltEcQrYKAABzHQAACgAAAGpzL2JpbGwu"
+    "yGMxyYZz1CJ37p8RNM5eVgqj5MGTUzxGDaqUP0XlK/VECX//f1BLAwQUAAAACAAFCmtdltEcQrYKAABzHQAACgAAAGpzL2JpbGwu"
     "anOtWetvE1cW/47E/3CRuvUMOBMny7JgkyK6dHfZqgEpi/gQRdHEHieTjGe884gbpZYMJcQJCY9u0pAQSKGkhEcTKK+QR5H2Tyme"
     "sf2Jf2HPvXfuvGxDKhWh5M695/zuuef8zrmPtB9EtRc/2bPz1Vub9sTz9ztLtfW7tRdvnIVXzvpL1I4qu4v1e7eh4Sw/cZa3qnNr"
     "9clr+HN+sbp25V3p4v59CCFn5qK9vIYKsprRCsLnsqKgyub0+52Z6twzJObzwrCBak+/BW3QQAfb9+/jspaaNmVNRdygog2ICo/G"
@@ -810,7 +814,7 @@ ASSETS_B64 = (
     "WrstTh1EKS5nxziL51PeC6aOn0XchQUX7o6Tq4ErELVSzGQajSR7CDOUpLg3itPugCvQeGghZy3Tv5gTQYF6td/URiTVCL6gphtE"
     "fa83ETcbxOmeF5bE9tLrfx4qFX6VJR/p4Idp8lHz/WksQufGDHDxLYFRBr9iBb7AMwn8+N7hCdKFUzG3zYQCJp5ACaA7tDw93wtU"
     "N/Ad0U97+umAPjsrcqwZ0TKJFtfMhhbQOCHNwAyKaJgn8cr8NHDHWtA+/LcUq2nG6BJkQKu60xT3j0lfPmgN/aMh/VNjF5s8/JeM"
-    "ZOTbfcUNvn0lQ1+ugEeqpN90h1gaJr1WnDmM+SQZaBN7weoiz9E/jeIl/B9QSwMEFAAAAAgAWwlrXcSKaDWwDAAA8igAAA0AAABq"
+    "ZOTbfcUNvn0lQ1+ugEeqpN90h1gaJr1WnDmM+SQZaBN7weoiz9E/jeIl/B9QSwMEFAAAAAgABQprXcSKaDWwDAAA8igAAA0AAABq"
     "cy9iaWxsaW5nLmpz3VpbbxNJFn5H4j+UeMnuKIk3uyOtFLQPmTDDRLDDiMtIuwihil2JW2l3e7vbIZmL5AAJCbkYZkLuA4QhITOA"
     "HSAQ23GS/wKudvuJv7Cnqrrb3Xb7kpE2u1qQEOmuc+pUna++89XphD5B1s4mnX1QzM7RbJre/dV8sG3Opj8kb548gRDqxzJWwqQb"
     "0fSSuZAr7i+Xn/xszm3Q1C+lldvWboYe3P5YmCytZmkmV5rfMid34bkYQNe26c/Jj4VVJSHL6G/IymyYa7P07jp9MGG+XjfXpuj4"
@@ -854,7 +858,7 @@ ASSETS_B64 = (
     "eJ9hnaArF8/zzkvSmnxR3Nvgv+oFREu3D5xKI74HiaHtKGHvBMzJSBb2FiyCvHsoxPESVKCK2afm493yrX3e8Vutk0/WVXAahHBH"
     "MqemYTj7GMo/UJrTUzS1QCcXrfUtO/lfQBFA/aoRDcy+/bFSt+PiF6Mq3nhB17bRBVnGMSicvCteerVXLBQQO4hwDrv+/NfOP8Hf"
     "ru6urk//8ilsAsTIrnDllVTx4BDC42FADZLVMJYdV6xlU9eD/TVBGRW75EWS81l6IKGE2S9ZgMAxbP37BynyRwEuuEUkNMX5xbar"
-    "UuQa+v5758dOgUPw8kO1o8sJQ9UkLNd48n7+dtx5n/l8/htQSwMEFAAAAAgAWwlrXdGiLoBeOAAAL7AAAAoAAABqcy9pMThuLmpz"
+    "UuQa+v5758dOgUPw8kO1o8sJQ9UkLNd48n7+dtx5n/l8/htQSwMEFAAAAAgABQprXdGiLoBeOAAAL7AAAAoAAABqcy9pMThuLmpz"
     "tX1ZcxTJtf+7P0XGPFiSDc2M7b/j/sFzCRDg4c6wBNLY4RjPQ6m7pC7UXdWuqkZoGCLEIhBoZUCsYliGbVgkMWxCQijifhRb1cuT"
     "v8I9S2btVdJ9uBG21XSf3E6ePFue/Hnbb0RzdqJ9+37j6nnvxbV/jZz+riw+F835kfXVy+tLL+Drf3+Y0E34bq85UDGcMpD8SgjR"
     "vPKk8Wr23x9u4j+E+KL3wFeifX7CO3dDlDRX22p89h/m558M6sOfiG3BN1tr5cg/XcOt6JFvNNvQuMv/6sEOYRzhdnZARx1dojF2"
@@ -1047,7 +1051,7 @@ ASSETS_B64 = (
     "eUD5jZMtLjymGlLKC1ZMkbBBR10Fp1Yx3M6O7wOiaM8G3oN+0XvgK2hCTQtVrdYZKD403SmKr+NPFeM/O8RvCXws0J7f/PpP//lt"
     "VHMWw6399idEx6/Rwv1aq9Z2wDZ1/In+VXHpH/9J/xiAf4iT3xS/3eG3P9kFQ3b8aRsOHijOwlHLMDs7OhI7CGp2c3un2YaW3DqT"
     "d86EjYOe/C0zwzuGmtyMCx92t7XCqDuwEZImaxOROip/pB4HKlafVimAkjsI8+DxwGNw2VWQZmC7+sDfDqhvB8Lf+spye/CRf/HN"
-    "xfbgI/9SMoowGFpZ9jj8+ZAi2/Grk12d7P7DtP8HUEsDBBQAAAAIAFsJa10w3916xAUAAHoNAAAIAAAAanMvbWQuanPNVt1v01YU"
+    "xfbgI/9SMoowGFpZ9jj8+ZAi2/Grk12d7P7DtP8HUEsDBBQAAAAIAAUKa10w3916xAUAAHoNAAAIAAAAanMvbWQuanPNVt1v01YU"
     "f+9fcQlVbSdt3JQJac1Hpe2FB5gmwZvttm7qNhn+yGwHNtFKzaClhdIi9SNQKBQGa7WtRUIgQT//GGI7eeq/sHPvtRO7KQMmHpYH"
     "x+feez5+v3vO8eHjyH1S8Xam0CXZvDpqXNeR++61+3TpeH+t9u5e7XC9/na1trdXO1hxXqw2bm45u7A17/2x5+0eOYuvvOWtD1O/"
     "dSCE3OVX7nwFq+397m1UnPXqh6lK/dm8MzNNV0D0XldrB0vw4q4+pi+NpUN34SVe2bjdeP4Avzyec3YXebe6AX/ObLX+DDxUnP0V"
@@ -1067,7 +1071,7 @@ ASSETS_B64 = (
     "iaGhIYAS7+STtgKRElI/A08kNJMk2sc8tlOIP/GiNfAF9IXdjeAOjucCxSci5RMR3viieISeeEL65H36S+ECRF1drfo6AyMEU1ah"
     "uE+5eD8rT63bsnqyULGZIJ8jWaAWT2DGC5+883bEUHtCkvtKmI3/gNlox2x8NcxtsZD+G2oaQZuNIo2o0W/MN/CpPnrgLDxtjjKt"
     "mReHSHs6Ex4V27pb+7xWHP0l2lZHIsOJ8ENZG1FMFh+T0MQECuYUhgnGEphRJ8NdVrZtE2yMJPFBPMOiUdmWe7CUjWH2QoMIPUQ+"
-    "QTE86jJMdLLJlEwFqxCbuKnQ8aPNCl4N4db95u9/24gOfOJM0AyGosmOfwBQSwMEFAAAAAgAWwlrXcSN0gYhCAAA8xQAAA8AAABq"
+    "QTE86jJMdLLJlEwFqxCbuKnQ8aPNCl4N4db95u9/24gOfOJM0AyGosmOfwBQSwMEFAAAAAgABQprXcSN0gYhCAAA8xQAAA8AAABq"
     "cy9wcm92aWRlcnMuanO1mFtT20gWgN/5Ff3G7BSSMZckyxZblZnsZlKZVDKZy0tqaku2G1uLLGkk2UlmM1UGYrBjDJ5KiAM4ELLh"
     "UmHWmEkIYAz+MXFL8lP+wp6WZFs2Vkg2s34A66j79OnvXPq0fZ8jvZAlD9bIwnT9+X2zePI2MdmDENK31shKhuSy+rMDsnOo59/U"
     "86/fVZYG+gfOMX4/HSIrkiYFJWEE9UoyFjm+F5l7JeQLRjjNF5SisoA1XhLVd5WUcfSUvNgkL5b0hVJzvXeVNFXT+vRyohZRJJkP"
@@ -1096,7 +1100,7 @@ ASSETS_B64 = (
     "xyE57ly88n/IDIr8DtudMyAYZ4bY81YcO98ZOBewqp2Jz9LZjq2hwvr96PghSWebgTnc33/1U0IzGFM1Keq6fMElokgvvsCtdnSk"
     "359vzxFPkB2UOpF07rojLta2SXKdFGf1hdc0Cr4APej7m1/TTuUkQzYmEaUEkPx/HmD95y6wftbfP+L3Dw0OAX4wld53CiV03YpZ"
     "sLGx254f/9LTMwYXbPr7IQpj7YYixfkQVj7jQ3+yOCgYLhli68ctdowXQ5/JaPSvSGb5EBodHUV07L17rTG3+kHtLz3/BVBLAwQU"
-    "AAAACABbCWtdGqMmx+8EAADmDQAADAAAAGpzL3NlY3VyZS5qc61XW08bRxR+51ccv2R3U9eg9m1dt4p4ifoASPAW9WExY3vL2uvu"
+    "AAAACAAFCmtdGqMmx+8EAADmDQAADAAAAGpzL3NlY3VyZS5qc61XW08bRxR+51ccv2R3U9eg9m1dt4p4ifoASPAW9WExY3vL2uvu"
     "xalFLFFSwNxC1ABKgYZKTYVVFUHUmytM82PqWZsn/kJnZmdnx8amoIQHsOecOefM950bo/cBPzvq7Bx1n17g9QN89k33p+Wr1j5e"
     "/xGfruCTl3ipAR9wHXg4MzP17+LSCADgw0aw9gJvLuPnzzr738KDchkuVzc7Ow0YN8pG1vRsB4Lt79rnf161Dqj2H9vd4zr+vkG0"
     "uqu/4PXG5eIiPngFlp01rGmibuQRjEIOednCVWuTOgnWFoPDNbx6EeyeXT69aDe32q39gITZWsLNJlHCr990f/+53VzE/2x03+4Q"
@@ -1113,7 +1117,7 @@ ASSETS_B64 = (
     "k+Chrz0ysIP6Hqsl8mqyMpKNkGylo+GqSB/MlpgwvK985PaUlu9YSSggYw45xN6sPVednP3yWj7RcN6xDVETKR6AKo8OEoFOfyWl"
     "syLyCvacDsrU5PSMIkt4qHr0gSb5Qk3WoG/Q4fPpyYlU2KLMXFXlDwu1NWmiaP8z2NjzB21x8a4VkkESY8IvziKHjL3wRKPexvq1"
     "GWWZuKPSyK43VHaq0xHK5cwzESkKiCYUCgdOT5omehTZpxn4aGyM9nF+8Al8PDYWZZHek006zyl56t6phQ+oUr7oTkT/ZPDNeWBx"
-    "SAuZLn8JpXHJ6dLnEeaQuHtslubsx8Tpf1BLAwQUAAAACABbCWtdKnrpgdsLAAABIgAACwAAAGpzL3N0b3JlLmpzrVlbTxxHFn5f"
+    "SAuZLn8JpXHJ6dLnEeaQuHtslubsx8Tpf1BLAwQUAAAACAAFCmtdKnrpgdsLAAABIgAACwAAAGpzL3N0b3JlLmpzrVlbTxxHFn5f"
     "af9D+SUzY8aD7ZX2AZKsWIfssomxZZxoJcuKmpkCOnNVd89gRJAGO5iBcEtsfMEmvsjECMWAHV+wZzD/ZT3VMzzxF/acqr5U9fRg"
     "Vloe0HTXOadOnet3qjuPE/v+7/b9d+zZHXZ1nT2/+qF89c9/IoTUa3fYVIVk8kktM2DlDW2YHtTu2a8Wm08r7O5647fJxs11e26y"
     "/naKzd06qFXq739iv11t3HtpL6yRIT1Duzo7iT1zg9XK9u3XjZUf91eWGk8n9+8uscrrg9oMvOQb7ZfL7N6v7PoUqsC1OKjNsbev"
@@ -1154,7 +1158,7 @@ ASSETS_B64 = (
     "P9q1RfHRGBu23Hb1LJ4k4PmCNoYGbwkAp9u567y8iJ8J5Yi8G0vu/5/CZwQwqvOhbQAqiQiTrFaIAu/n5Ao63mfBmALAyG8pTx4a"
     "bqj7EaKNtxf9chAXJPFEx5KwOf5AFfn3rSTXBtktPadUJs4lJmcHc0NExsggVPG0TMZPV8yZI/qQFVWKH2IIlK80Xku38AolmeA/"
     "eNu172+wn3fZ0ryIFbWPO206KbdphaBYSGlOICcT3oM66kklSs45bgUwvrCCtMAd0tHRmn/itCYEXDSqxclgDD0aHVT3PRkjJ6Db"
-    "BF8GpgRvzBIB0lIGuQ5uavEPNPAwEePR9l9QSwMEFAAAAAgAWwlrXQztyEbQEAAA3zcAAAoAAABqcy9zeW5jLmpz3TtrU9xGtt+3"
+    "BF8GpgRvzBIB0lIGuQ5uavEPNPAwEePR9l9QSwMEFAAAAAgABQprXQztyEbQEAAA3zcAAAoAAABqcy9zeW5jLmpz3TtrU9xGtt+3"
     "av9DU7V3R1rGwvHNVlIi3BR51XqT2K5rZ/OBsLfEjGAEM9KUpAFzHaqGxMSDDQbHjp/YjrkQP4jBzq4BGwj/ZTPSDJ/4C3tOd0tq"
     "aWbwI97Ee10u1GqdPt3nfbr7TMcfiPew7N28Wds6581O+fcXveV5v7JWW1r5qfzFb39DCKldeFQ/ea66frq+do44uj2s2x15zVQK"
     "g87u5pQ/ecafe1LfvgGjq+vl6vo98qnxgQFfahfu7ExMeyuPa9+O+9Pz1Y2F2uSUN3vWm/6bN7NSffJ17do6m5LOROfyKhv+yZnq"
@@ -1212,7 +1216,7 @@ ASSETS_B64 = (
     "BitmFh8vLgSdTBpWjpeC4UAF5zSjn0vQXzX89bNs+2dK7M/vOtivG8BsIIK25TAftV3nU8OFDOO1A28oKbEYAiblOqk4kIO7EvgM"
     "WXHyuOHYnyb/KSuDFogRe+WmZYSAQGQk+4GSgpeKUfGTsE9RxZd09Isb9pMTVWjzj2IxbtTmH7FsW6V/A+iwsFYV2vwjFraq9C/v"
     "4HfuatAIsLLDAvrgXdHlnyq001FpzAfsZiFsBusRzvvV2FtIXnDErArtALF4KqnGX4O1onNT2SOgikVuNWgEyCK9U8WXGJ+dgMlB"
-    "d7T/VIU2FTiIfUyWRgwTyELd+CdQSwMEFAAAAAgAWwlrXR0W54nWCAAAohUAAAwAAABqcy91cGRhdGUuanOdGFtTG9f53b/iwEN2"
+    "d7T/VIU2FTiIfUyWRgwTyELd+CdQSwMEFAAAAAgABQprXR0W54nWCAAAohUAAAwAAABqcy91cGRhdGUuanOdGFtTG9f53b/iwEN2"
     "ZcRKOGnSCtcehjINdY0ZwO6D62pW0gEtrHZ3do+EGaIZpXaCacA4NTZjDHWc4DHjcTEdO60NSvgvKbuSnvwX+p3L3iQ0tvsgafd8"
     "9/t3lDqNGsu3vK3n3sNX3v1974ea9+jJf2t/PYUQOn69420/9u7te6t73sGdt/UVb2W59fjAPVhz97ebL+69rW9SPIQGFNRceubu"
     "bR6/WUZ/mLw09rZ+Szfzqj5JTFudwai1tILm8IJqWZmyVVAJvmzryFtZcu9829i86W7tu9s1yv+7ultfaz798vj1N2/ry5z5GQX9"
@@ -1243,20 +1247,20 @@ ASSETS_B64 = (
     "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"
-    "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"
+    "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"
     "BgAAAAAQABAAkQMAAKxgAQAAAA=="
 )
 
@@ -1284,6 +1288,8 @@ FILE_DIR = os.path.join(DATA_DIR, "files")
 STATE_FILE = os.path.join(DATA_DIR, "state.json")
 TOKENS_FILE = os.path.join(DATA_DIR, "tokens.json")
 PROFILE_DIR = os.path.join(DATA_DIR, "window-profile")
+# 内嵌 WebView2 的 localStorage / IndexedDB 落在这个目录，换 exe 也不丢
+WEBVIEW_STORAGE = os.path.join(DATA_DIR, "webview")
 
 
 def ensure_dirs():
@@ -1939,21 +1945,150 @@ def start_server(port, assets, www_dir):
 
 # ---------------------------------------------------------------- 应用窗口
 #
-# 用 Chromium 系浏览器的「应用模式」承载界面：
-#   msedge.exe --app=http://127.0.0.1:PORT
-# 效果是一个没有地址栏、没有标签页的独立窗口，标题取页面标题。
-# 比内嵌 WebView 省事得多，也不用担心 Qt / 非 ASCII 路径。
+# 首选：pywebview 的 edgechromium 后端 → 内嵌 WebView2 控件。
+#       窗口属于本进程，不起浏览器，localStorage 落在 WEBVIEW_STORAGE。
+# 次选：Chrome/Edge 的 --app 应用模式（看着像独立软件，但仍是浏览器进程）。
+# 末选：系统默认浏览器 + 一个能看配对码的 tk 小窗。
 
 BROWSER_CANDIDATES = [
-    r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe",
-    r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe",
     r"%ProgramFiles%\Google\Chrome\Application\chrome.exe",
     r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe",
     r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe",
+    r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe",
+    r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe",
 ]
 
 # 窗口标题里出现这个就认为是我们的界面
 WINDOW_TITLE_HINT = "钥匙"
+
+WEBVIEW_STATE = {"checked": False, "ok": False, "why": ""}
+
+
+class _Bridge:
+    """暴露给页面的极小接口。目前只有一个用途：
+    回答里的外链点开时丢给系统默认浏览器，别把整个应用导航走。"""
+
+    def open_external(self, url):
+        try:
+            if isinstance(url, str) and url.split(":", 1)[0].lower() in ("http", "https", "mailto"):
+                webbrowser.open(url)
+                return True
+        except Exception:
+            pass
+        return False
+
+
+# 页内装一层外链兵，只拦 http(s)/mailto，站内跳转不管。
+_LINK_GUARD_JS = """
+(function () {
+  if (window.__keyappLinkGuard) return;
+  window.__keyappLinkGuard = true;
+  document.addEventListener('click', function (ev) {
+    var a = ev.target && ev.target.closest ? ev.target.closest('a[href]') : null;
+    if (!a) return;
+    var href = a.getAttribute('href') || '';
+    if (!/^(https?:|mailto:)/i.test(href)) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    try {
+      if (window.pywebview && window.pywebview.api && window.pywebview.api.open_external) {
+        window.pywebview.api.open_external(href);
+      } else {
+        window.open(href, '_blank');
+      }
+    } catch (e) {}
+  }, true);
+})();
+"""
+
+
+def webview_available():
+    """能不能用内嵌 WebView2。结果缓存，只探测一次。"""
+    if WEBVIEW_STATE["checked"]:
+        return WEBVIEW_STATE["ok"]
+
+    WEBVIEW_STATE["checked"] = True
+    try:
+        import webview  # noqa: F401
+    except Exception as e:
+        WEBVIEW_STATE["why"] = "pywebview 导入失败: %s" % e
+        return False
+
+    # 后端要能实例化（缺 pythonnet / WebView2 DLL 时这里会报）
+    try:
+        from webview.platforms import edgechromium  # noqa: F401
+    except Exception as e:
+        WEBVIEW_STATE["why"] = "WebView2 后端不可用: %s" % e
+        return False
+
+    WEBVIEW_STATE["ok"] = True
+    return True
+
+
+def run_embedded_window(url, width=1040, height=800):
+    """内嵌 WebView2 起窗口。阻塞到窗口关闭。
+    返回 True = 用户正常关窗；False = 起不来（调用方该走兜底）。"""
+    try:
+        import webview
+    except Exception as e:
+        HUB.log("内嵌窗口不可用: %s" % e)
+        return False
+
+    try:
+        os.makedirs(WEBVIEW_STORAGE, exist_ok=True)
+    except Exception:
+        pass
+
+    try:
+        window = webview.create_window(
+            APP_NAME,
+            url,
+            width=width,
+            height=height,
+            min_size=(720, 520),
+            text_select=True,
+            confirm_close=False,
+            js_api=_Bridge(),
+        )
+    except Exception as e:
+        HUB.log("创建窗口失败: %s" % e)
+        return False
+
+    opened = {"ok": False}
+
+    def _on_loaded():
+        if not opened["ok"]:
+            opened["ok"] = True
+            HUB.log("窗口已就绪（内嵌 WebView2），关掉它就会退出")
+        # 外链交给系统浏览器，别把应用本身导航走
+        try:
+            window.evaluate_js(_LINK_GUARD_JS)
+        except Exception:
+            pass
+
+    try:
+        window.events.loaded += _on_loaded
+    except Exception:
+        pass
+
+    try:
+        webview.start(
+            gui="edgechromium",          # 明确指定，别让它去试 Qt/GTK
+            private_mode=False,          # 要持久化 localStorage（密钥、会话）
+            storage_path=WEBVIEW_STORAGE,
+            debug=False,
+        )
+    except Exception as e:
+        HUB.log("内嵌窗口启动失败: %s" % e)
+        return False
+
+    if not opened["ok"]:
+        # start() 立刻返回、连页面都没加载 —— 当作启动失败去走兜底
+        HUB.log("内嵌窗口没加载出页面")
+        return False
+
+    HUB.log("窗口已关闭，正在退出")
+    return True
 
 
 def find_browser():
@@ -1963,7 +2098,7 @@ def find_browser():
             continue
         if os.path.isfile(p):
             return p
-    for name in ("msedge.exe", "chrome.exe"):
+    for name in ("chrome.exe", "msedge.exe"):
         p = shutil.which(name)
         if p:
             return p
@@ -2018,7 +2153,7 @@ def app_window_exists():
 
 
 def launch_app_window(url, width=1040, height=800):
-    """返回浏览器进程（可能很快就自己退出了，别用它判断寿命）。"""
+    """浏览器应用模式（兜底用）。返回进程，可能很快就自己退出。"""
     exe = find_browser()
     if not exe:
         return None
@@ -2063,7 +2198,7 @@ def watch_window(url):
         if app_window_exists():
             idle = 0
             continue
-        # 关窗后给 3 秒缓冲：Edge 有时会在换 tab 时短暂消失
+        # 关窗后给 3 秒缓冲：浏览器有时会在换 tab 时短暂消失
         idle += 1
         if idle >= 2:
             HUB.log("窗口已关闭，正在退出")
@@ -2071,16 +2206,16 @@ def watch_window(url):
 
 
 def fallback_window(url):
-    """没有 Edge/Chrome 时的兜底：默认浏览器 + 一个能看配对码的小窗。"""
+    """最后兜底：默认浏览器 + 一个能看配对码的小窗。"""
     import tkinter as tk
 
     primary, _ = local_ips()
     root = tk.Tk()
-    root.title("钥匙 · 电脑端")
+    root.title(APP_NAME + " · 电脑端")
     root.configure(bg="#F2F8FF")
     root.geometry("420x260")
 
-    tk.Label(root, text="钥匙 · 电脑端", bg="#2E7BD6", fg="white",
+    tk.Label(root, text=APP_NAME + " · 电脑端", bg="#2E7BD6", fg="white",
              font=("Microsoft YaHei UI", 12, "bold")).pack(fill="x", ipady=10)
     tk.Label(root, text="配对码", bg="#F2F8FF", fg="#5C6D63",
              font=("Microsoft YaHei UI", 9)).pack(pady=(14, 0))
@@ -2088,7 +2223,7 @@ def fallback_window(url):
              font=("Consolas", 26, "bold")).pack()
     tk.Label(root, text="手机访问  http://%s:%d" % (primary, HUB.port),
              bg="#F2F8FF", fg="#17211C", font=("Consolas", 9)).pack(pady=(6, 2))
-    tk.Label(root, text="没找到 Edge 或 Chrome，界面已在默认浏览器打开。\n关掉这个窗口服务就停。",
+    tk.Label(root, text="界面已在默认浏览器打开。\n关掉这个窗口服务就停。",
              bg="#F2F8FF", fg="#5C6D63", font=("Microsoft YaHei UI", 8),
              justify="center").pack(pady=8)
 
@@ -2097,6 +2232,23 @@ def fallback_window(url):
               font=("Microsoft YaHei UI", 9), padx=12, pady=4).pack(pady=6)
     webbrowser.open(url)
     root.mainloop()
+
+
+def show_window(url):
+    """按 内嵌 → 浏览器应用模式 → 默认浏览器 的顺序起界面。阻塞到关窗。
+    返回 True 表示窗口正常开过并关掉了。"""
+    if webview_available():
+        if run_embedded_window(url):
+            return True
+        HUB.log("内嵌窗口失败，改用浏览器应用模式")
+
+    win = launch_app_window(url)
+    if win is not None:
+        return watch_window(url)
+
+    HUB.log("没找到可用的浏览器窗口，改用系统默认浏览器")
+    fallback_window(url)
+    return True
 
 
 # ---------------------------------------------------------------- 入口
@@ -2108,6 +2260,10 @@ def main():
     # 已经有服务在跑：把窗口带出来就行，不起第二个
     if already_running(DEFAULT_PORT):
         url = "http://127.0.0.1:%d/" % DEFAULT_PORT
+        if webview_available():
+            # 只是把界面挂上去看，关窗不影响那已经在跑的服务
+            run_embedded_window(url)
+            return
         if launch_app_window(url) is None:
             webbrowser.open(url)
         else:
@@ -2142,20 +2298,8 @@ def main():
     url = "http://127.0.0.1:%d/" % port
     HUB.log("服务已启动 %s" % url)
 
-    win = launch_app_window(url)
-    if win is None:
-        HUB.log("没找到 Edge / Chrome，改用系统默认浏览器")
-        try:
-            fallback_window(url)
-        finally:
-            disc.stop()
-            srv.shutdown()
-            srv.server_close()
-        return
-
     try:
-        if watch_window(url):
-            pass
+        show_window(url)
     except KeyboardInterrupt:
         pass
     finally:

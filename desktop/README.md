@@ -87,35 +87,54 @@
     ├── state.json         同步过来的对话与技能
     ├── tokens.json        已配对设备的令牌
     ├── files\             传送的文件
-    └── window-profile\    窗口用的浏览器配置（可删，会重建）
+    ├── webview\           内嵌 WebView2 的用户数据（密钥、会话存这里，别删）
+    └── window-profile\    仅在兜底用浏览器应用模式时产生（可删）
 ```
 
 数据在 exe 旁边，不在 PyInstaller 的临时解压目录，换位置时连 `keyapp-data` 一起搬。
 
-## 为什么用「应用模式」而不是内嵌 WebView
+## 窗口是怎么起起来的
 
-试过 pywebview（真内嵌），被环境卡住：
+用 **pywebview 的 edgechromium 后端**，直接创建 WebView2 控件：
+
+```python
+window = webview.create_window("钥匙", url, width=1040, height=800, ...)
+webview.start(gui="edgechromium", private_mode=False, storage_path=WEBVIEW_STORAGE)
+```
+
+- 窗口属于本进程，**不启动 msedge.exe**，任务管理器里只有 `钥匙.exe` + WebView2 运行时
+- 没有地址栏、标签页、书签栏
+- `storage_path` 指向 `keyapp-data/webview`，localStorage 跨启动保留（密钥不丢）
+- 回答里的外链用 `js_api` 拦下来交给系统默认浏览器，不会把应用本身导航走
+
+WebView2 **运行时**是 Windows 10/11 自带的系统组件（`msedgewebview2.exe`），
+它和 Edge 浏览器本体是两个东西：不读你的浏览器书签/历史/登录态，
+也不占用浏览器窗口。Windows 上要「内嵌网页」只能用它（或自己塞一个 100MB 的 Chromium）。
+
+### 早先踩过的坑（保留记录）
+
+最初试 pywebview 时打包失败：
 
 ```
 Exception: Qt plugin directory
 'C:/Users/???/AppData/.../PyQt5/Qt5/plugins' does not exist!
 ```
 
-用户名是非 ASCII，PyInstaller 的 Qt 钩子解析路径时出错，打包直接失败。
-所以改用 Chromium 的 `--app` 模式：
+用户名是非 ASCII，`--collect-all webview` 会把 `webview.platforms.qt` 也拉进来，
+触发 PyInstaller 的 PyQt5 钩子，它解析中文路径时崩掉。
 
-```
-msedge.exe --app=http://127.0.0.1:8787 --window-size=1040,800
-```
+现在 `desktop/build_exe.py` 里明确 `excludes=['PyQt5','PyQt6','PySide2','PySide6', 'webview.platforms.qt', ...]`，
+只收 `webview.platforms.edgechromium`，打包正常。
 
-- 没有地址栏、标签页、书签栏
-- 独立 profile 目录，不碰你平时的浏览器
-- Windows 10/11 自带 Edge，零额外依赖
+另外命令行传 `--add-data` 带中文路径也会被 argv 编码搞坏，
+所以路径全部在 `build_exe.py` 里由 Python 自己算，写成 spec 再交给 PyInstaller。
 
-代价是任务管理器里能看到 msedge 子进程（Electron 类应用也一样）。
+### 兜底链
 
-窗口生命周期不用 `Popen.wait()` 判断 —— Edge 会把 URL 转给已有实例然后自己退出。
-改成用 `user32.EnumWindows` 轮询有没有标题含「钥匙」的可见窗口，关掉就退出。
+pywebview 不可用（系统缺 WebView2 运行时）时依次退：
+
+1. Chrome / Edge 的 `--app` 应用模式（会开浏览器进程，但仍是独立窗口）
+2. 系统默认浏览器 + 一个显示配对码的 tk 小窗
 
 ## 已知限制
 
