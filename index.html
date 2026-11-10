@@ -156,6 +156,7 @@
 
   <div class="tabs" id="settingsTabs" role="tablist">
     <button type="button" role="tab" data-tab="keys" data-i18n="settings.tabKeys">密钥</button>
+    <button type="button" role="tab" data-tab="usage" data-i18n="settings.tabUsage">用量</button>
     <button type="button" role="tab" data-tab="look" data-i18n="settings.tabLook">外观</button>
     <button type="button" role="tab" data-tab="lang" data-i18n="settings.tabLang">语言</button>
     <button type="button" role="tab" data-tab="about" data-i18n="settings.tabAbout">关于</button>
@@ -222,6 +223,57 @@
       <div class="sheet-actions">
         <button class="text-btn danger" id="btnClearKeys" type="button" data-i18n="keys.clearAll">删除全部密钥</button>
       </div>
+    </div>
+
+    <!-- 用量 -->
+    <div class="pane" data-pane="usage" hidden>
+
+      <!-- 计费时段 -->
+      <section class="card" id="periodCard">
+        <div class="card-head">
+          <h2 data-i18n="usage.period">当前计费时段</h2>
+          <span class="card-badge" id="periodBadge">—</span>
+        </div>
+        <p class="card-text" id="periodText"></p>
+        <p class="card-note" id="periodNote"></p>
+      </section>
+
+      <!-- 余额 -->
+      <section class="card">
+        <div class="card-head">
+          <h2 data-i18n="usage.balance">余额</h2>
+          <button class="text-btn" id="btnRefreshBalance" type="button" data-i18n="usage.refresh">查询</button>
+        </div>
+        <p class="card-sub" id="balanceWho"></p>
+        <div class="balance-box" id="balanceBox"></div>
+        <p class="card-note" id="balanceNote"></p>
+      </section>
+
+      <!-- 本机用量统计 -->
+      <section class="card">
+        <div class="card-head">
+          <h2 data-i18n="usage.local">本机用量</h2>
+          <button class="text-btn" id="btnResetUsage" type="button" data-i18n="usage.reset">清零</button>
+        </div>
+        <div class="stat-row" id="usageStats"></div>
+        <p class="card-note" data-i18n="usage.localNote">只统计本机发出、且服务商在响应里返回了 token 用量的请求。换设备不累计。</p>
+      </section>
+
+      <!-- 充值 / 控制台 -->
+      <section class="card">
+        <div class="card-head"><h2 data-i18n="usage.money">充值与管理</h2></div>
+        <div class="link-row" id="moneyLinks"></div>
+        <p class="card-note" data-i18n="usage.moneyNote">充值和账单只能在服务商自己的控制台完成，本应用不接触你的支付信息。</p>
+      </section>
+
+      <!-- 获取 API Key 教程 -->
+      <section class="card">
+        <div class="card-head">
+          <h2 data-i18n="usage.tutorial">怎么拿到 API Key</h2>
+          <button class="text-btn" id="btnTutorial" type="button" data-i18n="usage.tutorialOpen">查看</button>
+        </div>
+        <p class="card-sub" id="tutorialWho"></p>
+      </section>
     </div>
 
     <!-- 外观 -->
@@ -330,6 +382,26 @@
   </div>
 </section>
 
+<!-- ============ 获取 API Key 教程 ============ -->
+<section class="sheet" id="tutorial" role="dialog" aria-modal="true">
+  <div class="sheet-top">
+    <div class="sheet-top-text">
+      <p class="sheet-title" id="tutorialTitle">怎么拿到 API Key</p>
+      <p class="sheet-sub" id="tutorialSub"></p>
+    </div>
+    <button class="icon-btn" id="btnCloseTutorial" aria-label="关闭" data-i18n-aria="common.close">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+  <div class="sheet-body">
+    <ol class="steps" id="tutorialSteps"></ol>
+    <div class="sheet-actions">
+      <button class="btn-primary" id="btnTutorialOpen" type="button" data-i18n="usage.gotoConsole">打开官网</button>
+    </div>
+    <p class="card-note" data-i18n="usage.tutorialPrivacy">打开的是服务商官网，不是第三方页面。Key 只存在你自己设备上。</p>
+  </div>
+</section>
+
 <!-- ============ 切换模型 ============ -->
 <section class="sheet" id="modelPicker" role="dialog" aria-modal="true">
   <div class="sheet-top">
@@ -418,6 +490,8 @@
 <script src="js/version.js"></script>
 <script src="js/i18n.js"></script>
 <script src="js/providers.js"></script>
+<script src="js/billing.js"></script>
+<script src="js/bill.js"></script>
 <script src="js/md.js"></script>
 <script src="js/secure.js"></script>
 <script src="js/store.js"></script>

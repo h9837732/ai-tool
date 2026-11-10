@@ -7,6 +7,26 @@
 
   var CHANGELOG = [
     {
+      v: '1.2.1',
+      date: '2026-11',
+      zh: [
+        '新增「用量」页：当前计费时段、余额查询、本机用量、充值入口',
+        'DeepSeek 高峰/空闲时段实时判断，空闲时段半价',
+        '余额查询接入 DeepSeek / Kimi / 硅基流动 / OpenRouter 四家官方接口',
+        '一键跳转各服务商官方充值页与账单页',
+        '内置 13 家服务商获取 API Key 的分步教程',
+        '请求带上 include_usage，能拿到服务商返回的真实 token 用量并在本机累计'
+      ],
+      en: [
+        'New Usage tab: billing period, balance, local usage, top-up links',
+        'Live peak / off-peak indicator for DeepSeek (off-peak is half price)',
+        'Balance supported for DeepSeek, Kimi, SiliconFlow and OpenRouter',
+        'One-tap links to each provider official top-up and billing pages',
+        'Step-by-step API key guides for all 13 providers',
+        'Requests now ask for include_usage so real token counts are recorded locally'
+      ]
+    },
+    {
       v: '1.2.0',
       date: '2026-11',
       zh: [
@@ -572,6 +592,7 @@
   function closeModelPicker() {
     el.modelPicker.dataset.open = 'false';
     setPanel(el.modelPicker, false);
+    setPanel(el.tutorial, false);
   }
 
   async function loadModelList(p, force) {
@@ -1825,6 +1846,8 @@
       model: prof.model,
       messages: oaMsgs,
       stream: true,
+      /* 让服务商在最后一个 chunk 里带上 token 用量，用于本机统计 */
+      stream_options: { include_usage: true },
       temperature: temp,
       max_tokens: maxTokens
     };
@@ -1860,6 +1883,8 @@
     if (j.error) {
       throw new ApiError((j.error && j.error.code) || 400, (j.error && j.error.message) || '服务商返回错误');
     }
+    /* 有些服务商把 usage 挂在最后一个没有 choices 的 chunk 上 */
+    if (j.usage && cb.onUsage) cb.onUsage(j.usage);
     var choice = j.choices && j.choices[0];
     if (!choice) return;
     var d = choice.delta || choice.message || {};
@@ -1871,6 +1896,15 @@
   function handleAnthropicChunk(j, cb) {
     if (!j) return;
     if (j.type === 'error') throw new ApiError(400, (j.error && j.error.message) || '服务商返回错误');
+    if (j.type === 'message_delta' && j.usage && cb.onUsage) {
+      cb.onUsage({
+        completion_tokens: j.usage.output_tokens,
+        total_tokens: j.usage.output_tokens
+      });
+    }
+    if (j.type === 'message_start' && j.message && j.message.usage && cb.onUsage) {
+      cb.onUsage({ prompt_tokens: j.message.usage.input_tokens });
+    }
     if (j.type === 'content_block_delta' && j.delta) {
       if (j.delta.type === 'text_delta' && j.delta.text) cb.onText(j.delta.text);
       else if (j.delta.type === 'thinking_delta' && j.delta.thinking) cb.onThink(j.delta.thinking);
@@ -1993,7 +2027,8 @@
             botMsg.reasoning = (botMsg.reasoning || '') + chunk;
             if (!botMsg.content) paint();
             else ensureReasoning(node, botMsg);
-          }
+          },
+          onUsage: function (u) { botMsg.usage = u; }
         });
       } catch (inner) {
         /* App 里遇到不允许跨域的服务商：改走原生请求（会丢掉流式） */
@@ -2037,6 +2072,14 @@
       ensureReasoning(node, botMsg);
       state.controller = null;
       setBusy(false);
+
+      /* 记本机用量（只统计服务商真的给了 token 数的请求） */
+      if (botMsg.usage) {
+        var pid = (activeProfile() || {}).id;
+        if (pid) Bill.addUsage(pid, botMsg.usage);
+        renderUsageStats();
+      }
+
       setActions(node, botMsg, idx);
       persistNow();
       autoScroll(false);
@@ -2121,6 +2164,215 @@
     startGeneration(node, botMsg, history, idx);
   }
 
+  /* ---------- 用量与账单 ---------- */
+
+  var DAY_NAMES_ZH = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+
+  function renderPeriod() {
+    if (!el.periodBadge) return;
+    var p = activeProfile();
+    var prov = p ? profileProvider(p) : null;
+    var bill = getBilling(p ? p.providerId : 'custom');
+
+    if (!bill.offPeak) {
+      el.periodBadge.textContent = '—';
+      delete el.periodBadge.dataset.peak;
+      el.periodText.textContent = t('usage.noOffPeak', { provider: prov ? prov.name : '-' });
+      el.periodNote.textContent = t('usage.noOffPeakNote');
+      return;
+    }
+
+    var r = Bill.deepseekPeriod(Date.now());
+    var bp = new Date(Date.now() + 8 * 3600 * 1000);
+    var dayName = DAY_NAMES_ZH[bp.getUTCDay()];
+
+    el.periodBadge.textContent = r.peak ? t('usage.peak') : t('usage.offPeak');
+    el.periodBadge.dataset.peak = r.peak ? 'true' : 'false';
+
+    el.periodText.textContent = t('usage.nowIs', {
+      day: dayName,
+      time: r.hhmm,
+      state: r.peak ? t('usage.peak') : t('usage.offPeak')
+    });
+
+    var notes = [];
+    if (r.peak) {
+      notes.push(t('usage.peakNote'));
+      if (r.remainMinutes != null) {
+        notes.push(t('usage.untilOff', { m: fmtMinutes(r.remainMinutes) }));
+      }
+    } else {
+      notes.push(t('usage.offPeakNote'));
+      if (r.remainMinutes != null) {
+        notes.push(t('usage.untilPeak', { m: fmtMinutes(r.remainMinutes) }));
+      }
+    }
+    notes.push(t('usage.holidayCaveat'));
+    el.periodNote.textContent = notes.join(' ');
+  }
+
+  function fmtMinutes(m) {
+    if (m == null) return '-';
+    var h = Math.floor(m / 60);
+    var mm = m % 60;
+    if (h <= 0) return mm + ' ' + t('usage.min');
+    return h + ' ' + t('usage.hour') + ' ' + mm + ' ' + t('usage.min');
+  }
+
+  function renderUsageStats() {
+    if (!el.usageStats) return;
+    var p = activeProfile();
+    if (!p) {
+      el.usageStats.innerHTML = '<p class="none">' + esc(t('usage.noKeyShort')) + '</p>';
+      return;
+    }
+    var u = Bill.loadUsage(p.id);
+    var rows = [
+      { k: t('usage.requests'), v: String(u.requests || 0) },
+      { k: t('usage.prompt'), v: fmtNum(u.prompt) },
+      { k: t('usage.completion'), v: fmtNum(u.completion) },
+      { k: t('usage.total'), v: fmtNum(u.total) }
+    ];
+    el.usageStats.innerHTML = rows.map(function (r) {
+      return '<div class="stat"><span class="stat-k">' + esc(r.k) + '</span><span class="stat-v">' + esc(r.v) + '</span></div>';
+    }).join('');
+  }
+
+  function fmtNum(n) {
+    var v = Number(n) || 0;
+    if (v >= 1000000) return (v / 1000000).toFixed(2) + 'M';
+    if (v >= 1000) return (v / 1000).toFixed(1) + 'k';
+    return String(v);
+  }
+
+  function renderMoneyLinks() {
+    if (!el.moneyLinks) return;
+    var p = activeProfile();
+    var bill = getBilling(p ? p.providerId : 'custom');
+    var items = [];
+    if (bill.recharge) items.push({ act: 'recharge', label: t('usage.recharge') });
+    if (bill.console) items.push({ act: 'console', label: t('usage.console') });
+    if (!items.length) {
+      el.moneyLinks.innerHTML = '<p class="none">' + esc(t('usage.noConsole')) + '</p>';
+      return;
+    }
+    el.moneyLinks.innerHTML = items.map(function (it) {
+      return '<button class="link-btn" type="button" data-act="' + it.act + '">' +
+        esc(it.label) + '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 5h5v5M19 5l-8 8M11 5H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-5"/></svg></button>';
+    }).join('');
+  }
+
+  function renderUsagePane() {
+    var p = activeProfile();
+    var prov = p ? profileProvider(p) : null;
+    el.balanceWho.textContent = p ? (prov.name + ' · ' + (p.model || '')) : t('usage.noKeyShort');
+    el.tutorialWho.textContent = prov ? prov.name : '-';
+    renderPeriod();
+    renderUsageStats();
+    renderMoneyLinks();
+    if (!el.balanceBox.dataset.filled) {
+      el.balanceBox.innerHTML = '<p class="none">' + esc(t('usage.balanceHint')) + '</p>';
+      el.balanceNote.textContent = '';
+    }
+  }
+
+  async function refreshBalance() {
+    var p = activeProfile();
+    if (!p) { toast(t('toast.needKeyFirst')); return; }
+    var prov = profileProvider(p);
+    var bill = getBilling(p.providerId);
+
+    if (!bill.balance) {
+      el.balanceBox.innerHTML = '<p class="none">' + esc(t('usage.noBalanceApi', { provider: prov.name })) + '</p>';
+      el.balanceNote.textContent = t('usage.noBalanceNote');
+      delete el.balanceBox.dataset.filled;
+      return;
+    }
+
+    el.btnRefreshBalance.disabled = true;
+    el.balanceBox.innerHTML = '<p class="none">' + esc(t('usage.checking')) + '</p>';
+
+    /* 余额地址跟着用户的接口地址走，这样走中转站也能查 */
+    var base = String(p.baseUrl || prov.baseUrl || '').trim().replace(/\/+$/, '');
+    if (bill.balance.dropV1) base = base.replace(/\/v1$/, '');
+    var url = base + bill.balance.path;
+    var headers = { 'authorization': 'Bearer ' + p.apiKey };
+    if (prov.protocol === 'anthropic') {
+      headers = { 'x-api-key': p.apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' };
+    }
+
+    var json = null;
+    var errMsg = '';
+    try {
+      var res = await fetch(url, { headers: headers });
+      if (!res.ok) throw new ApiError(res.status, 'HTTP ' + res.status);
+      json = await res.json();
+    } catch (e) {
+      if (isNative && Native.NativeHttp.hasPlugin()) {
+        var r = await Native.NativeHttp.request(url, headers, {});
+        if (r && r.ok) {
+          try { json = JSON.parse(r.text); } catch (e2) { errMsg = 'parse'; }
+        } else if (r) {
+          errMsg = pickServerMessage(r.text) || ('HTTP ' + r.status);
+        } else {
+          errMsg = (e && e.message) || 'failed';
+        }
+      } else {
+        errMsg = (e && e.status) ? ('HTTP ' + e.status) : ((e && e.message) || 'failed');
+      }
+    }
+
+    el.btnRefreshBalance.disabled = false;
+
+    if (!json) {
+      el.balanceBox.innerHTML = '<p class="none">' + esc(t('usage.balanceFail', { msg: errMsg })) + '</p>';
+      el.balanceNote.textContent = t('usage.balanceFailNote') + ' ' + url;
+      delete el.balanceBox.dataset.filled;
+      return;
+    }
+
+    var parsed = Bill.parseBalance(bill.balance.kind, json);
+    if (!parsed.rows.length) {
+      el.balanceBox.innerHTML = '<p class="none">' + esc(t('usage.balanceEmpty')) + '</p>';
+      delete el.balanceBox.dataset.filled;
+      return;
+    }
+
+    el.balanceBox.innerHTML = parsed.rows.map(function (r) {
+      return '<div class="stat"><span class="stat-k">' + esc(r.label) + '</span>' +
+        '<span class="stat-v">' + esc(r.value) + '</span></div>';
+    }).join('');
+    el.balanceBox.dataset.filled = 'true';
+
+    if (parsed.available != null && parsed.available <= 0) {
+      el.balanceNote.textContent = t('usage.balanceEmptyWarn');
+      el.balanceNote.dataset.warn = 'true';
+    } else {
+      el.balanceNote.textContent = t('usage.balanceAt', { time: timeLabel(Date.now()) });
+      delete el.balanceNote.dataset.warn;
+    }
+  }
+
+  /* 教程 */
+  function openTutorial() {
+    var p = activeProfile();
+    var pid = p ? p.providerId : 'custom';
+    var prov = getProvider(pid);
+    var tut = getTutorial(pid);
+
+    el.tutorialTitle.textContent = t('usage.tutorialTitle', { provider: prov.name });
+    el.tutorialSub.textContent = prov.name;
+    var lang = I18N.getLang() === 'en' ? 1 : 0;
+    el.tutorialSteps.innerHTML = tut.steps.map(function (s) {
+      return '<li>' + esc(s[lang] || s[0]) + '</li>';
+    }).join('');
+    el.btnTutorialOpen.hidden = !tut.url;
+    el.btnTutorialOpen.dataset.url = tut.url || '';
+    setPanel(el.tutorial, true);
+  }
+
+  function closeTutorial() { setPanel(el.tutorial, false); }
+
   /* ---------- 更新检查 ---------- */
 
   var updateState = { latest: '', url: '', notes: '' };
@@ -2181,7 +2433,8 @@
     var anyOpen = el.drawer.dataset.open === 'true' ||
       el.settings.dataset.open === 'true' ||
       el.skills.dataset.open === 'true' ||
-      (el.modelPicker && el.modelPicker.dataset.open === 'true');
+      (el.modelPicker && el.modelPicker.dataset.open === 'true') ||
+      (el.tutorial && el.tutorial.dataset.open === 'true');
     el.scrim.dataset.open = anyOpen ? 'true' : 'false';
   }
 
@@ -2206,6 +2459,7 @@
   function setSettingsTab(name) {
     state.settingsTab = name || 'keys';
     renderTabs();
+    if (state.settingsTab === 'usage') renderUsagePane();
     el.settings.querySelector('.sheet-body').scrollTop = 0;
   }
 
@@ -2246,6 +2500,7 @@
     fillSettingsForm();
     setSettingsTab(tab || state.settingsTab || 'keys');
     setPanel(el.settings, true);
+    renderUsagePane();
   }
 
   function closeSettings() {
@@ -2444,7 +2699,7 @@
   function bindEvents() {
     el.btnMenu.addEventListener('click', openDrawer);
     el.btnCloseDrawer.addEventListener('click', closeDrawer);
-    el.scrim.addEventListener('click', function () { closeDrawer(); closeSettings(); closeSkills(); closeModelPicker(); });
+    el.scrim.addEventListener('click', function () { closeDrawer(); closeSettings(); closeSkills(); closeModelPicker(); closeTutorial(); });
     el.btnNew.addEventListener('click', function () {
       closeDrawer();
       leaveTempIfNeeded(function () {
@@ -2708,6 +2963,31 @@
       toast(t('toast.deleted'));
     });
 
+    /* 用量页 */
+    el.btnRefreshBalance.addEventListener('click', refreshBalance);
+    el.btnResetUsage.addEventListener('click', function () {
+      var p = activeProfile();
+      if (!p) return;
+      if (!window.confirm(t('usage.resetAsk'))) return;
+      Bill.resetUsage(p.id);
+      renderUsageStats();
+      toast(t('toast.deleted'));
+    });
+    el.btnTutorial.addEventListener('click', openTutorial);
+    el.btnCloseTutorial.addEventListener('click', closeTutorial);
+    el.btnTutorialOpen.addEventListener('click', function () {
+      var u = el.btnTutorialOpen.dataset.url;
+      if (u) Update.open(u);
+    });
+    el.moneyLinks.addEventListener('click', function (e) {
+      var b = e.target.closest ? e.target.closest('[data-act]') : null;
+      if (!b) return;
+      var p = activeProfile();
+      var bill = getBilling(p ? p.providerId : 'custom');
+      if (b.dataset.act === 'recharge' && bill.recharge) Update.open(bill.recharge);
+      else if (b.dataset.act === 'console' && bill.console) Update.open(bill.console);
+    });
+
     /* 切换模型 */
     el.btnCloseModel.addEventListener('click', closeModelPicker);
     el.modelSearch.addEventListener('input', function () {
@@ -2756,7 +3036,7 @@
     });
 
     document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape') { closeDrawer(); closeSettings(); closeSkills(); closeModelPicker(); }
+      if (e.key === 'Escape') { closeDrawer(); closeSettings(); closeSkills(); closeModelPicker(); closeTutorial(); }
     });
 
     if (window.matchMedia) {
@@ -2876,6 +3156,25 @@
     el.btnSfCancel = $('btnSfCancel');
     el.btnCloseSkills = $('btnCloseSkills');
 
+    el.periodBadge = $('periodBadge');
+    el.periodText = $('periodText');
+    el.periodNote = $('periodNote');
+    el.balanceWho = $('balanceWho');
+    el.balanceBox = $('balanceBox');
+    el.balanceNote = $('balanceNote');
+    el.btnRefreshBalance = $('btnRefreshBalance');
+    el.usageStats = $('usageStats');
+    el.btnResetUsage = $('btnResetUsage');
+    el.moneyLinks = $('moneyLinks');
+    el.tutorialWho = $('tutorialWho');
+    el.btnTutorial = $('btnTutorial');
+    el.tutorial = $('tutorial');
+    el.tutorialTitle = $('tutorialTitle');
+    el.tutorialSub = $('tutorialSub');
+    el.tutorialSteps = $('tutorialSteps');
+    el.btnTutorialOpen = $('btnTutorialOpen');
+    el.btnCloseTutorial = $('btnCloseTutorial');
+
     el.updateBar = $('updateBar');
     el.updateText = $('updateText');
     el.updateGo = $('updateGo');
@@ -2968,6 +3267,11 @@
         renderSecureNote();
       });
     }
+
+    /* 时段每分钟刷一次，页面一直开着也能看到高峰/空闲切换 */
+    setInterval(function () {
+      if (state.settingsTab === 'usage' && el.settings.dataset.open === 'true') renderPeriod();
+    }, 60000);
 
     /* 启动后延迟几秒再查更新，不抢首屏 */
     setTimeout(function () { checkUpdate(false); }, 3500);
