@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="钥匙">
+  <rect width="512" height="512" rx="112" fill="#0F1613"/>
+  <g fill="none" stroke="#D8A25C" stroke-width="26" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="196" cy="196" r="62"/>
+    <path d="M239 239 L360 360"/>
+    <path d="M318 318 L288 348"/>
+    <path d="M352 352 L322 382"/>
+  </g>
+</svg>

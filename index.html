@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0F1613">
+<meta name="color-scheme" content="dark light">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="description" content="自带 API Key 的 AI 对话客户端，多个密钥条目、自定义技能，对话记录只存在本机。">
+<title>钥匙 · AI 对话</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+<div class="app">
+  <header class="bar">
+    <button class="icon-btn" id="btnMenu" aria-label="打开对话列表">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10"/></svg>
+    </button>
+    <div class="bar-mid">
+      <h1 class="conv-title" id="convTitle">新对话</h1>
+      <button class="model-chip" id="btnModel" title="打开设置">
+        <span id="modelName">未选择模型</span>
+      </button>
+    </div>
+    <button class="bar-chip" id="btnTemp" type="button" hidden>临时</button>
+    <button class="bar-chip save" id="btnSaveTemp" type="button" hidden>保存</button>
+    <button class="icon-btn" id="btnNew" aria-label="新建对话" title="新建对话">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+    </button>
+  </header>
+
+  <main class="stream" id="stream" role="log" aria-live="polite">
+    <div class="empty" id="emptyState">
+      <p class="empty-lead">先接上你自己的钥匙</p>
+      <p class="empty-text">在设置里填入任意服务商的 API Key。请求从这台设备直接发往服务商，不经过任何中转服务器，对话记录也只留在本机。</p>
+      <button class="btn-primary" id="emptyAction" type="button">填入 API Key</button>
+    </div>
+  </main>
+
+  <footer class="composer">
+    <div class="box" id="composerBox">
+      <div class="attach" id="attachStrip" hidden></div>
+      <textarea id="input" rows="1" placeholder="输入消息，回车发送，Shift + 回车换行" autocomplete="off" spellcheck="false"></textarea>
+
+      <div class="tools">
+        <div class="tools-left">
+          <button class="tool" id="btnKeyIcon" type="button" aria-label="设置" title="设置">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M12 3.5v2.2M12 18.3v2.2M4.9 4.9l1.6 1.6M17.5 17.5l1.6 1.6M3.5 12h2.2M18.3 12h2.2M4.9 19.1l1.6-1.6M17.5 6.5l1.6-1.6"/></svg>
+          </button>
+          <button class="tool" id="btnSkillIcon" type="button" aria-label="技能" title="技能">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l2.2 5.1 5.6.5-4.2 3.7 1.3 5.5L12 15l-4.9 2.8 1.3-5.5L4.2 8.6l5.6-.5z"/></svg>
+            <span class="badge" id="skillBadge" hidden>0</span>
+          </button>
+          <button class="tool" id="btnMore" type="button" aria-label="添加图片或文件" aria-haspopup="true" aria-expanded="false" title="添加图片或文件">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+        </div>
+
+        <div class="tools-right">
+          <button class="tool effort-btn" id="btnEffort" type="button" aria-haspopup="true" aria-expanded="false" title="思考强度">
+            <svg class="gauge" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 17a8 8 0 1 1 16 0"/><path d="M12 17l4-5"/></svg>
+            <span id="effortName">中</span>
+            <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5"/></svg>
+          </button>
+
+          <div class="ctx" id="ctxRing" role="img" aria-label="上下文使用量">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle class="track" cx="12" cy="12" r="8.5"/>
+              <circle class="bar" id="ctxBar" cx="12" cy="12" r="8.5" stroke-dasharray="0 100"/>
+            </svg>
+          </div>
+
+          <button class="tool" id="btnMic" type="button" aria-label="语音输入" title="语音输入">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+          </button>
+
+          <button class="send" id="btnSend" type="button" aria-label="发送">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <p class="status" id="statusLine"></p>
+
+    <div class="pop effort-pop" id="effortPop" hidden>
+      <div class="pop-head">
+        <span>思考强度</span>
+        <span class="pop-value" id="effortPopName">中</span>
+      </div>
+      <input type="range" id="effortRange" min="0" max="4" step="1" value="2" aria-label="思考强度">
+      <div class="effort-ticks" id="effortTicksLabels">
+        <span>关闭</span><span>低</span><span>中</span><span>高</span><span>无限制</span>
+      </div>
+      <p class="pop-note" id="effortNote" hidden></p>
+    </div>
+
+    <div class="pop menu" id="moreMenu" hidden>
+      <button type="button" data-act="pick-image">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M4 17l5-5 4 4 3-3 4 4"/></svg>
+        相册 / 图片
+      </button>
+      <button type="button" data-act="pick-file">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>
+        文件
+      </button>
+      <span class="menu-sep"></span>
+      <button type="button" data-act="drawer">对话列表</button>
+      <button type="button" data-act="import">导入对话</button>
+      <button type="button" data-act="export">导出全部</button>
+    </div>
+    <input type="file" id="pickImages" accept="image/*" multiple hidden>
+    <input type="file" id="pickFiles" multiple hidden
+           accept=".txt,.md,.markdown,.json,.csv,.log,.js,.ts,.py,.java,.kt,.c,.h,.cpp,.cs,.go,.rs,.html,.css,.xml,.yml,.yaml,.sh,.sql,.ini,.conf,.toml">
+  </footer>
+</div>
+
+<aside class="drawer" id="drawer" aria-label="对话列表">
+  <div class="drawer-top">
+    <p class="drawer-label">对话</p>
+    <button class="icon-btn" id="btnCloseDrawer" aria-label="关闭">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+  <div class="conv-list" id="convList"></div>
+  <div class="drawer-foot">
+    <button class="text-btn" id="btnExportAll">导出全部</button>
+    <button class="text-btn" id="btnImport">导入</button>
+    <button class="text-btn" id="btnSkills2">技能</button>
+    <input type="file" id="fileImport" accept=".json,application/json" hidden>
+  </div>
+</aside>
+<div class="scrim" id="scrim"></div>
+
+<!-- ============ 密钥与设置 ============ -->
+<section class="sheet" id="settings" aria-label="密钥与设置" role="dialog" aria-modal="true">
+  <div class="sheet-top">
+    <p class="sheet-title">密钥与设置</p>
+    <button class="icon-btn" id="btnCloseSettings" aria-label="关闭">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+
+  <div class="sheet-body">
+    <section class="sect">
+      <div class="sect-head">
+        <h2>我的密钥</h2>
+        <button class="text-btn" id="btnAddProfile" type="button">新增</button>
+      </div>
+      <p class="sect-note">每个 Key 单独一条，填一次就留在本机。点一行切换正在用的。</p>
+      <div class="plist" id="profileList"></div>
+    </section>
+
+    <section class="pform" id="profileForm" hidden>
+      <p class="pform-title" id="profileFormTitle">新增密钥</p>
+
+      <div class="field">
+        <label for="pfLabel">这条叫什么</label>
+        <input type="text" id="pfLabel" spellcheck="false" placeholder="例如：DeepSeek 主力">
+        <p class="field-note">只给你自己看，方便区分几个 Key。</p>
+      </div>
+
+      <div class="field">
+        <label for="pfProvider">服务商</label>
+        <select id="pfProvider"></select>
+        <p class="field-note" id="pfProviderNote"></p>
+      </div>
+
+      <div class="field">
+        <label for="pfBase">接口地址</label>
+        <input type="text" id="pfBase" inputmode="url" spellcheck="false" placeholder="https://api.deepseek.com/v1">
+      </div>
+
+      <div class="field">
+        <label for="pfKey">API Key</label>
+        <div class="key-row">
+          <input type="password" id="pfKey" spellcheck="false" autocomplete="off" placeholder="sk-…">
+          <button class="text-btn" id="btnPfToggleKey" type="button">显示</button>
+        </div>
+        <p class="field-note">只存在这台设备上。共用电脑时用完记得删掉这条。</p>
+      </div>
+
+      <div class="field">
+        <label for="pfModel">默认模型</label>
+        <div class="key-row">
+          <input type="text" id="pfModel" spellcheck="false" list="pfModelOptions" placeholder="deepseek-chat">
+          <button class="text-btn" id="btnPfFetch" type="button">拉取列表</button>
+        </div>
+        <datalist id="pfModelOptions"></datalist>
+      </div>
+
+      <div class="pform-actions">
+        <button class="btn-primary" id="btnPfSave" type="button">保存这条</button>
+        <button class="text-btn" id="btnPfCancel" type="button">取消</button>
+      </div>
+    </section>
+
+    <section class="sect">
+      <div class="sect-head"><h2>偏好</h2></div>
+
+      <div class="field">
+        <label for="fSystem">基础提示词（可选）</label>
+        <textarea id="fSystem" class="f" rows="3" placeholder="例如：回答用中文，简洁一些。"></textarea>
+        <p class="field-note">每次对话都会带上。技能的内容会接在这后面。</p>
+      </div>
+
+      <div class="field-row">
+        <div class="field">
+          <label for="fTemp">温度 <span class="val" id="tempVal">1.0</span></label>
+          <input type="range" id="fTemp" min="0" max="2" step="0.1" value="1">
+        </div>
+        <div class="field">
+          <label for="fMax">最大回复长度</label>
+          <input type="number" id="fMax" min="256" max="32768" step="256" value="2048">
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="fTheme">明暗</label>
+        <select id="fTheme">
+          <option value="dark">深色</option>
+          <option value="light">浅色</option>
+          <option value="auto">跟随系统</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label>配色</label>
+        <div class="palettes" id="paletteList"></div>
+        <p class="field-note">点一个就用上。自定义可以自己选强调色和底色。</p>
+      </div>
+
+      <div class="palette-custom" id="paletteCustom" hidden>
+        <div class="field-row">
+          <div class="field">
+            <label for="fAccent">强调色</label>
+            <input type="color" id="fAccent" value="#d8a25c">
+          </div>
+          <div class="field">
+            <label for="fBg">底色</label>
+            <input type="color" id="fBg" value="#0f1613">
+          </div>
+        </div>
+        <p class="field-note">只选两个色，其余的悬浮层、分割线、文字色会自动推导出来。</p>
+      </div>
+    </section>
+
+    <div class="sheet-actions">
+      <button class="btn-primary" id="btnSaveSettings" type="button">完成</button>
+      <button class="text-btn danger" id="btnClearKeys" type="button">删除全部密钥</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 技能 ============ -->
+<section class="sheet" id="skills" aria-label="技能" role="dialog" aria-modal="true">
+  <div class="sheet-top">
+    <p class="sheet-title">技能</p>
+    <button class="icon-btn" id="btnCloseSkills" aria-label="关闭">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+
+  <div class="sheet-body">
+    <section class="sect">
+      <div class="sect-head">
+        <h2>已添加的技能</h2>
+        <button class="text-btn" id="btnAddSkill" type="button">新增</button>
+      </div>
+      <p class="sect-note">打开开关的技能，每次提问都会附在基础提示词后面。关掉就不生效。</p>
+      <div class="slist" id="skillList"></div>
+    </section>
+
+    <section class="pform" id="skillForm" hidden>
+      <p class="pform-title" id="skillFormTitle">新增技能</p>
+
+      <div class="field">
+        <label for="sfName">名称</label>
+        <input type="text" id="sfName" spellcheck="false" placeholder="例如：翻译成英式英语">
+      </div>
+
+      <div class="field">
+        <label for="sfHint">什么时候用（可选）</label>
+        <input type="text" id="sfHint" spellcheck="false" placeholder="例如：写论文、改句子时">
+      </div>
+
+      <div class="field">
+        <label for="sfBody">指令正文</label>
+        <textarea id="sfBody" class="f" rows="6" placeholder="写清楚要模型怎么做。例如：把下面的中文翻译成英式英语，保留原文的段落结构，不要加解释。"></textarea>
+        <p class="field-note">这段文字会原样发给模型，当成硬性要求。</p>
+      </div>
+
+      <div class="field">
+        <label>套用示例</label>
+        <div class="chips" id="skillSamples"></div>
+      </div>
+
+      <div class="pform-actions">
+        <button class="btn-primary" id="btnSfSave" type="button">保存这个技能</button>
+        <button class="text-btn" id="btnSfCancel" type="button">取消</button>
+      </div>
+    </section>
+  </div>
+</section>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="js/providers.js"></script>
+<script src="js/md.js"></script>
+<script src="js/store.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
