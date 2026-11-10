@@ -24,8 +24,9 @@
     </button>
     <div class="bar-mid">
       <h1 class="conv-title" id="convTitle">新对话</h1>
-      <button class="model-chip" id="btnModel" title="打开设置" data-i18n-title="tool.settings">
+      <button class="model-chip" id="btnModel" title="切换模型" data-i18n-title="models.pick">
         <span id="modelName">未选择模型</span>
+        <svg class="chip-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5"/></svg>
       </button>
     </div>
     <button class="bar-chip" id="btnTemp" type="button" hidden>临时</button>
@@ -326,6 +327,38 @@
       </section>
     </div>
 
+  </div>
+</section>
+
+<!-- ============ 切换模型 ============ -->
+<section class="sheet" id="modelPicker" role="dialog" aria-modal="true">
+  <div class="sheet-top">
+    <div class="sheet-top-text">
+      <p class="sheet-title" id="modelPickerTitle">选择模型</p>
+      <p class="sheet-sub" id="modelPickerSub"></p>
+    </div>
+    <button class="icon-btn" id="btnCloseModel" aria-label="关闭" data-i18n-aria="common.close">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+
+  <div class="sheet-body">
+    <div class="field">
+      <input type="search" id="modelSearch" spellcheck="false" data-i18n-ph="models.searchPh" autocomplete="off">
+    </div>
+
+    <p class="model-status" id="modelPickerStatus"></p>
+
+    <div class="model-list" id="modelOptionList"></div>
+
+    <div class="field model-custom">
+      <label for="modelCustom" data-i18n="models.custom">手动输入模型名</label>
+      <div class="key-row">
+        <input type="text" id="modelCustom" spellcheck="false" placeholder="deepseek-flash">
+        <button class="text-btn" id="btnModelUse" type="button" data-i18n="models.use">使用</button>
+      </div>
+      <p class="field-note" data-i18n="models.customNote">服务商没返回的模型、或刚上线还没进列表的，直接填名字。</p>
+    </div>
   </div>
 </section>
 

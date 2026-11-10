@@ -1568,3 +1568,104 @@ input[type="color"]::-webkit-color-swatch {
 }
 .update-src summary:hover { color: var(--accent); }
 .update-src .field { margin-top: 10px; }
+
+/* ---------- 顶栏模型名（可点开切换） ---------- */
+
+.model-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 100%;
+}
+.model-chip:hover { color: var(--accent); }
+.chip-chev {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: .7;
+}
+
+/* ---------- 切换模型面板 ---------- */
+
+.sheet-top-text { min-width: 0; }
+.sheet-top-text .sheet-title { margin-bottom: 1px; }
+.sheet-sub {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 62vw;
+}
+
+#modelSearch {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+  outline: none;
+}
+#modelSearch:focus { border-color: var(--accent); }
+#modelSearch::-webkit-search-cancel-button { filter: grayscale(1); }
+
+.model-status {
+  margin: 0 0 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.model-status[data-err="true"] { color: var(--danger); }
+
+.model-list {
+  max-height: 46vh;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  margin-bottom: 16px;
+}
+.model-list:empty { display: none; }
+
+.model-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 11px 13px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  text-align: left;
+  word-break: break-all;
+}
+.model-row:last-child { border-bottom: none; }
+.model-row:hover { background: var(--raise); }
+.model-row[data-on="true"] { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.model-row[data-on="true"] .model-row-name { color: var(--accent); }
+.model-row-name { flex: 1 1 auto; min-width: 0; }
+.model-row-flag {
+  flex: 0 0 auto;
+  font-family: var(--font);
+  font-size: 9.5px;
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.model-custom { margin-bottom: 4px; }

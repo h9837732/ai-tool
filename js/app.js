@@ -7,6 +7,22 @@
 
   var CHANGELOG = [
     {
+      v: '1.2.0',
+      date: '2026-11',
+      zh: [
+        '新增切换模型：顶栏点模型名，实时向服务商拉取可用模型列表',
+        '支持搜索、手填模型名，拉取失败自动回落到预设模型',
+        '对话中途换模型会被记录下来，方便回看',
+        '仓库改为公开，更新检查零配置即可用'
+      ],
+      en: [
+        'Switch models from the title bar, with the live model list from the provider',
+        'Search, or type any model name; falls back to presets when the list is unavailable',
+        'Model switches inside a chat are recorded for later review',
+        'Repository is now public, so update checks work with no setup'
+      ]
+    },
+    {
       v: '1.1.0',
       date: '2026-11',
       zh: [
@@ -452,62 +468,197 @@
     toast(t('toast.deleted'));
   }
 
+  /* 从服务商拉取模型列表。浏览器直接拿，跨域失败时 App 里改走原生请求。
+     返回 { ok, list, error, status }，不抛异常。 */
+  async function fetchModelsFrom(prov, base, key) {
+    base = String(base || '').replace(/\/+$/, '');
+    if (!base) return { ok: false, error: 'nobase' };
+    if (!key) return { ok: false, error: 'nokey' };
+
+    var headers = { 'authorization': 'Bearer ' + key };
+    if (prov.protocol === 'anthropic') {
+      headers = {
+        'x-api-key': key,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      };
+    }
+
+    function pick(j) {
+      return (j.data || j.models || []).map(function (x) {
+        return typeof x === 'string' ? x : (x.id || x.name || '');
+      }).filter(Boolean).sort();
+    }
+
+    try {
+      var res = await fetch(base + '/models', { headers: headers });
+      if (!res.ok) throw new ApiError(res.status, 'HTTP ' + res.status);
+      var list = pick(await res.json());
+      if (!list.length) return { ok: false, error: 'empty' };
+      return { ok: true, list: list };
+    } catch (e) {
+      if (isNative && Native.NativeHttp.hasPlugin()) {
+        var r = await Native.NativeHttp.request(base + '/models', headers, {});
+        if (r && r.ok) {
+          try {
+            var list2 = pick(JSON.parse(r.text));
+            if (list2.length) return { ok: true, list: list2, native: true };
+          } catch (e2) { /* 落到失败分支 */ }
+        } else if (r) {
+          return { ok: false, error: pickServerMessage(r.text) || ('HTTP ' + r.status), status: r.status };
+        }
+      }
+      return {
+        ok: false,
+        error: (e && e.message) || 'failed',
+        status: e && e.status,
+        blocked: !!(prov.browserBlocked && !isNative)
+      };
+    }
+  }
+
+  function refreshPfModelOptions(list) {
+    el.pfModelOptions.innerHTML = (list || []).map(function (m) {
+      return '<option value="' + esc(m) + '"></option>';
+    }).join('');
+  }
+
   async function fetchModelList() {
     var prov = getProvider(el.pfProvider.value);
-    var base = (el.pfBase.value.trim() || prov.baseUrl || '').replace(/\/+$/, '');
+    var base = (el.pfBase.value.trim() || prov.baseUrl || '');
     var key = el.pfKey.value.trim();
     if (!base) { toast(t('err.noBase')); return; }
     if (!key) { toast(t('err.noKey')); return; }
 
     el.btnPfFetch.disabled = true;
     el.btnPfFetch.textContent = t('keys.fetching');
-    try {
-      var headers = { 'authorization': 'Bearer ' + key };
-      if (prov.protocol === 'anthropic') {
-        headers = {
-          'x-api-key': key,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true'
-        };
-      }
-      var list = [];
-      try {
-        var res = await fetch(base + '/models', { headers: headers });
-        if (!res.ok) throw new ApiError(res.status, 'HTTP ' + res.status);
-        var j = await res.json();
-        list = (j.data || j.models || []).map(function (x) {
-          return typeof x === 'string' ? x : (x.id || x.name || '');
-        }).filter(Boolean);
-      } catch (e) {
-        /* 浏览器被跨域拦下时，App 里改走原生请求再试一次 */
-        if (isNative && Native.NativeHttp.hasPlugin()) {
-          var r = await Native.NativeHttp.request(base + '/models', headers, {});
-          if (r && r.ok) {
-            try {
-              var jj = JSON.parse(r.text);
-              list = (jj.data || jj.models || []).map(function (x) {
-                return typeof x === 'string' ? x : (x.id || x.name || '');
-              }).filter(Boolean);
-            } catch (e2) { throw e; }
-          } else { throw e; }
-        } else { throw e; }
-      }
-      list = list.sort();
-      if (!list.length) throw new Error('empty');
-      el.pfModelOptions.innerHTML = list.map(function (m) {
-        return '<option value="' + esc(m) + '"></option>';
-      }).join('');
-      if (list.indexOf(el.pfModel.value.trim()) < 0) el.pfModel.value = list[0];
-      toast(list.length + ' models');
-    } catch (err) {
-      toast((err && err.message ? err.message : '') + ' — ' + t('keys.fetch'), 5000);
-    } finally {
-      el.btnPfFetch.disabled = false;
-      el.btnPfFetch.textContent = t('keys.fetch');
+    var r = await fetchModelsFrom(prov, base, key);
+    if (r.ok) {
+      refreshPfModelOptions(r.list);
+      if (r.list.indexOf(el.pfModel.value.trim()) < 0) el.pfModel.value = r.list[0];
+      toast(t('models.fetched', { n: r.list.length }));
+    } else {
+      toast(t('models.fetchFail', { msg: r.error || 'error' }), 5000);
+    }
+    el.btnPfFetch.disabled = false;
+    el.btnPfFetch.textContent = t('keys.fetch');
+  }
+
+  /* ---------- 当前对话换模型 ---------- */
+
+  var modelPicker = { list: [], filter: '', loading: false };
+
+  function currentProfile() {
+    return activeProfile();
+  }
+
+  function openModelPicker() {
+    var p = currentProfile();
+    if (!p) { openSettings('keys'); toast(t('toast.needKeyFirst')); return; }
+
+    modelPicker.filter = '';
+    el.modelSearch.value = '';
+    el.modelPicker.dataset.open = 'true';
+    setPanel(el.modelPicker, true);
+    el.modelPickerTitle.textContent = t('models.pick');
+    el.modelPickerSub.textContent = profileProvider(p).name + ' · ' + (p.baseUrl || profileProvider(p).baseUrl || '');
+
+    /* 先用已缓存的列表铺一遍，再后台刷新 */
+    var cached = p.modelCache && p.modelCache.length ? p.modelCache : (profileProvider(p).models || []);
+    renderModelOptions(cached, p.model);
+    loadModelList(p, false);
+  }
+
+  function closeModelPicker() {
+    el.modelPicker.dataset.open = 'false';
+    setPanel(el.modelPicker, false);
+  }
+
+  async function loadModelList(p, force) {
+    if (modelPicker.loading) return;
+    modelPicker.loading = true;
+    el.modelPickerStatus.textContent = t('models.loading');
+    el.modelPickerStatus.dataset.err = 'false';
+
+    var prov = profileProvider(p);
+    var r = await fetchModelsFrom(prov, p.baseUrl || prov.baseUrl, p.apiKey);
+    modelPicker.loading = false;
+
+    if (r.ok) {
+      modelPicker.list = r.list;
+      /* 缓存到密钥条目上，下次打开先秒显 */
+      p.modelCache = r.list;
+      p.modelCacheAt = Date.now();
+      saveProfiles();
+      renderModelOptions(r.list, p.model);
+      el.modelPickerStatus.textContent = t('models.count', { n: r.list.length }) + (r.native ? ' · ' + t('models.viaNative') : '');
+    } else {
+      modelPicker.list = [];
+      var msg = r.blocked ? t('err.corsBlocked', { provider: prov.name })
+                          : t('models.fetchFail', { msg: r.error || 'error' });
+      el.modelPickerStatus.textContent = msg;
+      el.modelPickerStatus.dataset.err = 'true';
+      /* 拉不到就把预设模型摆出来，仍然可选 */
+      renderModelOptions((prov.models || []), p.model);
     }
   }
 
-  /* ---------- 技能 ---------- */
+  function renderModelOptions(list, currentModel) {
+    var box = el.modelOptionList;
+    box.innerHTML = '';
+    var f = modelPicker.filter.trim().toLowerCase();
+    var shown = 0;
+
+    /* 当前值永远排在最前，即使服务商没返回它（比如自定义模型名） */
+    var all = [];
+    if (currentModel) all.push(currentModel);
+    for (var i = 0; i < list.length; i++) {
+      if (list[i] !== currentModel) all.push(list[i]);
+    }
+
+    for (var j = 0; j < all.length; j++) {
+      var m = all[j];
+      if (f && m.toLowerCase().indexOf(f) < 0) continue;
+      shown++;
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'model-row';
+      b.dataset.model = m;
+      if (m === currentModel) b.dataset.on = 'true';
+      b.innerHTML = '<span class="model-row-name">' + esc(m) + '</span>' +
+        (m === currentModel ? '<span class="model-row-flag">' + esc(t('keys.inUse')) + '</span>' : '');
+      box.appendChild(b);
+    }
+
+    if (!shown) {
+      var none = document.createElement('p');
+      none.className = 'none';
+      none.textContent = t('models.noMatch');
+      box.appendChild(none);
+    }
+    el.modelCustom.value = currentModel || '';
+  }
+
+  function pickModel(name) {
+    var p = currentProfile();
+    if (!p || !name) return;
+    var changed = p.model !== name;
+    p.model = name;
+    saveProfiles();
+
+    /* 已有消息的对话，记录本次切换，避免以后翻记录对不上 */
+    if (state.conv && state.conv.messages.length && changed) {
+      if (!Array.isArray(state.conv.modelSwitches)) state.conv.modelSwitches = [];
+      state.conv.modelSwitches.push({ at: Date.now(), model: name });
+      state.conv.model = name;
+      persistNow();
+    }
+    renderHint();
+    renderModelOptions(modelPicker.list, name);
+    if (changed) toast(t('models.switched', { v: name }), 2200);
+  }
+
+  /* ---------- 技能 ---------- */  /* ---------- 技能 ---------- */
 
   function enabledSkills() {
     return state.skills.filter(function (s) { return s.enabled && String(s.body || '').trim(); });
@@ -1479,6 +1630,21 @@
       sk.title = msg.skills.join(', ');
       head.appendChild(sk);
     }
+
+    /* 这条消息之前本对话换过模型：标一个提示，避免回看时困惑 */
+    if (state.conv && Array.isArray(state.conv.modelSwitches)) {
+      var prevAt = 0;
+      for (var mi = 0; mi < state.conv.modelSwitches.length; mi++) {
+        var sw = state.conv.modelSwitches[mi];
+        if (sw.at <= (msg.at || 0) && sw.at > prevAt) prevAt = sw.at;
+      }
+      if (prevAt && msg.at && prevAt >= (msg.at || 0) - 1000 && prevAt <= (msg.at || 0) + 500) {
+        var swTag = document.createElement('span');
+        swTag.className = 'msg-skills';
+        swTag.textContent = t('models.switchHint');
+        head.appendChild(swTag);
+      }
+    }
     node.appendChild(head);
 
     if (msg.reasoning) node.appendChild(reasoningBlock(msg));
@@ -2014,7 +2180,8 @@
     panel.setAttribute('aria-hidden', open ? 'false' : 'true');
     var anyOpen = el.drawer.dataset.open === 'true' ||
       el.settings.dataset.open === 'true' ||
-      el.skills.dataset.open === 'true';
+      el.skills.dataset.open === 'true' ||
+      (el.modelPicker && el.modelPicker.dataset.open === 'true');
     el.scrim.dataset.open = anyOpen ? 'true' : 'false';
   }
 
@@ -2094,6 +2261,7 @@
 
   function closeSkills() {
     setPanel(el.skills, false);
+    setPanel(el.modelPicker, false);
     closeSkillForm();
   }
 
@@ -2276,7 +2444,7 @@
   function bindEvents() {
     el.btnMenu.addEventListener('click', openDrawer);
     el.btnCloseDrawer.addEventListener('click', closeDrawer);
-    el.scrim.addEventListener('click', function () { closeDrawer(); closeSettings(); closeSkills(); });
+    el.scrim.addEventListener('click', function () { closeDrawer(); closeSettings(); closeSkills(); closeModelPicker(); });
     el.btnNew.addEventListener('click', function () {
       closeDrawer();
       leaveTempIfNeeded(function () {
@@ -2287,7 +2455,7 @@
     el.btnTemp.addEventListener('click', toggleTemp);
     el.btnSaveTemp.addEventListener('click', saveTempConv);
     el.btnSettings2.addEventListener('click', function () { closeDrawer(); openSettings('keys'); });
-    el.btnModel.addEventListener('click', function () { closePops(); openSettings('keys'); });
+    el.btnModel.addEventListener('click', function () { closePops(); openModelPicker(); });
     el.btnSkillIcon.addEventListener('click', function () { closePops(); openSkills(); });
     el.btnSkills2.addEventListener('click', openSkills);
 
@@ -2540,6 +2708,28 @@
       toast(t('toast.deleted'));
     });
 
+    /* 切换模型 */
+    el.btnCloseModel.addEventListener('click', closeModelPicker);
+    el.modelSearch.addEventListener('input', function () {
+      modelPicker.filter = el.modelSearch.value;
+      renderModelOptions(modelPicker.list.length ? modelPicker.list : (profileProvider(currentProfile()).models || []), currentProfile() ? currentProfile().model : '');
+    });
+    el.modelOptionList.addEventListener('click', function (e) {
+      var b = e.target.closest ? e.target.closest('button[data-model]') : null;
+      if (!b) return;
+      pickModel(b.dataset.model);
+      closeModelPicker();
+    });
+    el.btnModelUse.addEventListener('click', function () {
+      var v = el.modelCustom.value.trim();
+      if (!v) { el.modelCustom.focus(); return; }
+      pickModel(v);
+      closeModelPicker();
+    });
+    el.modelCustom.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); el.btnModelUse.click(); }
+    });
+
     /* 更新 */
     el.updateGo.addEventListener('click', function () {
       if (!updateState.url) return;
@@ -2566,7 +2756,7 @@
     });
 
     document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape') { closeDrawer(); closeSettings(); closeSkills(); }
+      if (e.key === 'Escape') { closeDrawer(); closeSettings(); closeSkills(); closeModelPicker(); }
     });
 
     if (window.matchMedia) {
@@ -2598,6 +2788,15 @@
     el.convTitle = $('convTitle');
     el.modelName = $('modelName');
     el.btnModel = $('btnModel');
+    el.modelPicker = $('modelPicker');
+    el.modelPickerTitle = $('modelPickerTitle');
+    el.modelPickerSub = $('modelPickerSub');
+    el.modelPickerStatus = $('modelPickerStatus');
+    el.modelSearch = $('modelSearch');
+    el.modelOptionList = $('modelOptionList');
+    el.modelCustom = $('modelCustom');
+    el.btnModelUse = $('btnModelUse');
+    el.btnCloseModel = $('btnCloseModel');
     el.btnTemp = $('btnTemp');
     el.btnSaveTemp = $('btnSaveTemp');
     el.btnSettings2 = $('btnSettings2');
