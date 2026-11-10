@@ -1879,3 +1879,39 @@ input[type="color"]::-webkit-color-swatch {
   padding: 0;
 }
 .period-x:hover { color: var(--text); }
+
+
+/* ---------- 连接页 ---------- */
+
+.file-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.file-list:has(.none) { border: none; }
+
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+.file-row:last-child { border-bottom: none; }
+
+.file-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-size {
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--muted);
+}

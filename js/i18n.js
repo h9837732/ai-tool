@@ -221,6 +221,53 @@
       'toast.secureMigrated': '密钥已迁到系统钥匙串加密存储',
       'toast.secureFail': '系统钥匙串不可用，密钥仍以明文保存',
 
+      'settings.tabLink': '连接',
+
+      'link.title': '手机与电脑',
+      'link.connected': '已连接',
+      'link.offline': '未连接',
+      'link.notConnectedText': '把手机和电脑连起来，对话和文件就能互相同步。',
+      'link.connectedText': '这台设备「{device}」已配对，上次同步 {time}。',
+      'link.never': '还没同步过',
+      'link.startPair': '配对电脑',
+      'link.autofill': '自动填入',
+      'link.autofilled': '已填好地址和配对码',
+      'link.autofillFail': '读不到配对码。请在电脑上运行 server/lan.mjs，再用它打印的地址打开本页。',
+      'link.pairTitle': '配对这台电脑',
+      'link.url': '电脑地址',
+      'link.urlNote': '在电脑上运行 server/lan.mjs，终端里会打印这个地址。',
+      'link.code': '配对码',
+      'link.codeNote': '终端里那 6 位数字，每次启动服务都会换。',
+      'link.doPair': '连接',
+      'link.pairing': '连接中…',
+      'link.paired': '配对成功，开始同步',
+      'link.pairFail': '配对失败：{msg}',
+      'link.badCode': '配对码不对，看电脑终端里那一行',
+      'link.network': '连不上电脑。确认在同一个 WiFi、地址和端口正确、电脑上的服务还在跑',
+      'link.syncNow': '立即同步',
+      'link.syncing': '正在同步…',
+      'link.synced': '同步完成，新增 {pulled} 条，共 {total} 条',
+      'link.syncFail': '同步失败：{msg}',
+      'link.refreshFiles': '刷新文件',
+      'link.disconnect': '断开',
+      'link.disconnectAsk': '断开这台电脑？对话不会删，只是不再同步。',
+      'link.disconnected': '已断开',
+      'link.needConnect': '先配对一台电脑',
+      'link.files': '文件',
+      'link.sendFile': '发送文件',
+      'link.filesNote': '文件直接存到电脑的 server/data/files/ 目录，中间不经过任何服务器。',
+      'link.noFiles': '电脑上还没有文件',
+      'link.get': '下载',
+      'link.uploading': '正在发送 {name}…',
+      'link.uploaded': '已发送到电脑：{name}',
+      'link.uploadFail': '发送失败：{msg}',
+      'link.downloaded': '已下载 {name}',
+      'link.downloadFail': '下载失败：{msg}',
+      'link.deleteAsk': '删掉电脑上的「{name}」？',
+      'link.howto': '怎么用',
+      'link.steps': '在电脑上打开命令行，进入项目目录|运行 bun run server/lan.mjs，终端会打印地址和 6 位配对码|手机连同一个 WiFi，在浏览器打开那个地址，或在 App 里点「配对电脑」|填好配对码，之后对话会自动双向同步',
+      'link.note': '',
+
       'settings.tabUsage': '用量',
 
       'period.offPeakNow': '空闲时段 · 半价',
@@ -546,6 +593,53 @@
       'toast.secureMigrated': 'Keys moved into encrypted system storage',
       'toast.secureFail': 'System keystore unavailable; keys stay in plain text',
 
+      'settings.tabLink': 'Link',
+
+      'link.title': 'Phone and desktop',
+      'link.connected': 'Connected',
+      'link.offline': 'Not connected',
+      'link.notConnectedText': 'Link your phone and desktop to keep chats and files in sync.',
+      'link.connectedText': 'This device "{device}" is paired. Last synced {time}.',
+      'link.never': 'never',
+      'link.startPair': 'Pair a computer',
+      'link.autofill': 'Fill in automatically',
+      'link.autofilled': 'Address and code filled in',
+      'link.autofillFail': 'Could not read the pairing code. Run server/lan.mjs on the computer and open this page from the address it prints.',
+      'link.pairTitle': 'Pair this computer',
+      'link.url': 'Computer address',
+      'link.urlNote': 'Running server/lan.mjs prints this address in the terminal.',
+      'link.code': 'Pairing code',
+      'link.codeNote': 'The 6 digits in the terminal. It changes every time the service starts.',
+      'link.doPair': 'Connect',
+      'link.pairing': 'Connecting…',
+      'link.paired': 'Paired — syncing now',
+      'link.pairFail': 'Pairing failed: {msg}',
+      'link.badCode': 'Wrong pairing code — check the computer terminal',
+      'link.network': 'Cannot reach the computer. Check you are on the same WiFi, the address and port are right, and the service is still running',
+      'link.syncNow': 'Sync now',
+      'link.syncing': 'Syncing…',
+      'link.synced': 'Synced: {pulled} new, {total} total',
+      'link.syncFail': 'Sync failed: {msg}',
+      'link.refreshFiles': 'Refresh files',
+      'link.disconnect': 'Disconnect',
+      'link.disconnectAsk': 'Disconnect this computer? Chats are not deleted, they just stop syncing.',
+      'link.disconnected': 'Disconnected',
+      'link.needConnect': 'Pair a computer first',
+      'link.files': 'Files',
+      'link.sendFile': 'Send a file',
+      'link.filesNote': 'Files are written straight to server/data/files/ on the computer. No server in between.',
+      'link.noFiles': 'No files on the computer yet',
+      'link.get': 'Get',
+      'link.uploading': 'Sending {name}…',
+      'link.uploaded': 'Sent to the computer: {name}',
+      'link.uploadFail': 'Send failed: {msg}',
+      'link.downloaded': 'Downloaded {name}',
+      'link.downloadFail': 'Download failed: {msg}',
+      'link.deleteAsk': 'Delete "{name}" on the computer?',
+      'link.howto': 'How to use it',
+      'link.steps': 'Open a terminal on the computer and cd into the project|Run bun run server/lan.mjs — it prints an address and a 6-digit code|Put the phone on the same WiFi and open that address, or tap "Pair a computer" in the app|Enter the code; chats then sync both ways automatically',
+      'link.note': '',
+
       'settings.tabUsage': 'Usage',
 
       'period.offPeakNow': 'Off-peak · half price',
@@ -699,6 +793,16 @@
     var tits = scope.querySelectorAll('[data-i18n-title]');
     for (var m = 0; m < tits.length; m++) {
       tits[m].setAttribute('title', t(tits[m].getAttribute('data-i18n-title')));
+    }
+    var stepLists = scope.querySelectorAll('[data-i18n-steps]');
+    for (var si = 0; si < stepLists.length; si++) {
+      var key = stepLists[si].getAttribute('data-i18n-steps');
+      var parts = t(key).split('|');
+      stepLists[si].innerHTML = parts.map(function (line) {
+        return '<li>' + line.replace(/[&<>]/g, function (c) {
+          return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c];
+        }) + '</li>';
+      }).join('');
     }
     var ars = scope.querySelectorAll('[data-i18n-aria]');
     for (var n = 0; n < ars.length; n++) {

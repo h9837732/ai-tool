@@ -16,6 +16,8 @@ const Store = (function () {
   const K_SKILLS = PREFIX + 'skills';
   const K_SCHEMA = PREFIX + 'schemaVersion';
   const K_SECURE = PREFIX + 'secureProfiles';
+  const K_TOMB = PREFIX + 'tombstones';
+  const K_SKILLS_AT = PREFIX + 'skillsAt';
 
   /* 当前数据结构版本。加字段不用动它，只有改了存储形态才 +1。 */
   const SCHEMA = 2;
@@ -112,7 +114,29 @@ const Store = (function () {
 
     /* ---- 技能 ---- */
     loadSkills: function () { return readArray(K_SKILLS); },
-    saveSkills: function (list) { return writeRaw(K_SKILLS, JSON.stringify(list)); },
+    saveSkills: function (list) {
+      const ok = writeRaw(K_SKILLS, JSON.stringify(list));
+      writeRaw(K_SKILLS_AT, String(Date.now()));
+      return ok;
+    },
+    skillsAt: function () { return Number(readRaw(K_SKILLS_AT) || 0) || 0; },
+    loadSkillsAt: function () { return this.skillsAt(); },
+    saveSkillsAt: function (ts) { return writeRaw(K_SKILLS_AT, String(Number(ts) || Date.now())); },
+
+    /* ---- 墓碑：记录「什么时候删了哪条对话」，同步时用来防复活 ---- */
+    loadTombstones: function () {
+      const v = readJSON(K_TOMB, {});
+      return v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+    },
+    addTombstone: function (id, at, keepNewer) {
+      if (!id) return;
+      const t = this.loadTombstones();
+      const ts = Number(at) || Date.now();
+      if (keepNewer && t[id] && t[id] >= ts) return;
+      t[id] = ts;
+      writeRaw(K_TOMB, JSON.stringify(t));
+    },
+    clearTombstones: function () { removeRaw(K_TOMB); },
 
     /* ---- 对话 ---- */
     loadIndex: function () { return readArray(K_INDEX); },
@@ -120,7 +144,10 @@ const Store = (function () {
 
     loadConv: function (id) { return readJSON(K_CONV + id, null); },
     saveConv: function (conv) { return writeRaw(K_CONV + conv.id, JSON.stringify(conv)); },
-    removeConv: function (id) { removeRaw(K_CONV + id); },
+    removeConv: function (id) {
+      removeRaw(K_CONV + id);
+      this.addTombstone(id, Date.now());
+    },
 
     /* ---- 升级迁移 ----
        只读不动、只补不删：老版本的键原样保留，新版本加自己的版本号。

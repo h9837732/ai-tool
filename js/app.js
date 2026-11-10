@@ -7,6 +7,26 @@
 
   var CHANGELOG = [
     {
+      v: '1.3.0',
+      date: '2026-11',
+      zh: [
+        '手机与电脑互通：同一个 WiFi 下双向同步对话',
+        '局域网桥服务：电脑上跑一条命令，终端给出地址和 6 位配对码',
+        '文件互传：手机发文件到电脑、电脑文件下载到手机',
+        '删除同步：一边删掉对话，另一边不会把它复活',
+        'API Key 刻意不同步，每台设备各自保管',
+        '新增「连接」页签，配对、同步、文件管理都在这'
+      ],
+      en: [
+        'Phone and desktop sync over the same WiFi',
+        'LAN bridge: one command on the computer prints the address and a 6-digit code',
+        'File transfer both ways',
+        'Deletions propagate — a deleted chat is not resurrected by an old copy',
+        'API keys are deliberately never synced; each device keeps its own',
+        'New Link tab: pairing, syncing and files in one place'
+      ]
+    },
+    {
       v: '1.2.2',
       date: '2026-11',
       zh: [
@@ -2181,6 +2201,146 @@
     startGeneration(node, botMsg, history, idx);
   }
 
+  /* ---------- 局域网连接 ---------- */
+
+  var linkFiles = [];
+
+  function renderLinkPane() {
+    if (!el.linkBadge) return;
+    var on = Sync.isConnected();
+    var c = Sync.connection();
+
+    el.linkBadge.textContent = on ? t('link.connected') : t('link.offline');
+    el.linkBadge.dataset.peak = on ? 'false' : 'true';
+
+    if (!on) {
+      el.linkState.textContent = t('link.notConnectedText');
+      el.linkWhere.textContent = '';
+      el.linkActions.innerHTML =
+        '<button class="link-btn" type="button" data-link="pair">' + esc(t('link.startPair')) + '</button>'
+        + '<button class="link-btn" type="button" data-link="autofill">' + esc(t('link.autofill')) + '</button>';
+      el.pairForm.hidden = true;
+      el.fileList.innerHTML = '<p class="none">' + esc(t('link.needConnect')) + '</p>';
+      return;
+    }
+
+    el.linkState.textContent = t('link.connectedText', {
+      device: c.deviceName || '-',
+      time: c.lastSyncAt ? timeLabel(c.lastSyncAt) : t('link.never')
+    });
+    el.linkWhere.textContent = c.url;
+    el.linkActions.innerHTML =
+      '<button class="link-btn" type="button" data-link="sync">' + esc(t('link.syncNow')) + '</button>'
+      + '<button class="link-btn" type="button" data-link="refresh">' + esc(t('link.refreshFiles')) + '</button>'
+      + '<button class="link-btn" type="button" data-link="off">' + esc(t('link.disconnect')) + '</button>';
+    el.pairForm.hidden = true;
+    if (!linkFiles.length) el.fileList.innerHTML = '<p class="none">' + esc(t('link.noFiles')) + '</p>';
+  }
+
+  function openPairForm(prefillUrl) {
+    el.pairForm.hidden = false;
+    el.pairUrl.value = prefillUrl || (Sync.connection() ? Sync.connection().url : '') || '';
+    el.pairCode.value = '';
+    el.pairCode.focus();
+  }
+
+  async function doPair() {
+    var url = el.pairUrl.value.trim();
+    var code = el.pairCode.value.trim();
+    if (!url) { el.pairUrl.focus(); return; }
+    if (!code) { el.pairCode.focus(); return; }
+
+    el.btnPair.disabled = true;
+    el.btnPair.textContent = t('link.pairing');
+    var r = await Sync.pair(url, code, Sync.deviceName());
+    el.btnPair.disabled = false;
+    el.btnPair.textContent = t('link.doPair');
+
+    if (!r.ok) {
+      var msg = r.error === 'bad-code' ? t('link.badCode')
+        : r.error === 'network' ? t('link.network')
+        : r.error || 'error';
+      toast(t('link.pairFail', { msg: msg }), 5000);
+      return;
+    }
+    toast(t('link.paired'));
+    renderLinkPane();
+    runSync();
+  }
+
+  async function runSync() {
+    if (!Sync.isConnected()) { toast(t('link.needConnect')); return; }
+    toast(t('link.syncing'), 1500);
+    var r = await Sync.syncNow();
+    if (!r.ok) {
+      toast(t('link.syncFail', { msg: r.error || 'error' }), 5000);
+      return;
+    }
+    /* 同步回来的对话要在界面上体现 */
+    state.index = Store.loadIndex();
+    renderConvList();
+    renderHint();
+    renderLinkPane();
+    toast(t('link.synced', {
+      pulled: r.result.pulled || 0,
+      total: r.result.total || 0
+    }), 3500);
+  }
+
+  function fmtSize(n) {
+    var v = Number(n) || 0;
+    if (v >= 1024 * 1024) return (v / 1024 / 1024).toFixed(1) + ' MB';
+    if (v >= 1024) return (v / 1024).toFixed(1) + ' KB';
+    return v + ' B';
+  }
+
+  function renderFileList() {
+    if (!el.fileList) return;
+    if (!linkFiles.length) {
+      el.fileList.innerHTML = '<p class="none">' + esc(t('link.noFiles')) + '</p>';
+      return;
+    }
+    el.fileList.innerHTML = linkFiles.map(function (f) {
+      return '<div class="file-row">' +
+        '<span class="file-name">' + esc(f.name) + '</span>' +
+        '<span class="file-size">' + esc(fmtSize(f.size)) + '</span>' +
+        '<button class="mini-btn" type="button" data-dl="' + esc(f.name) + '">' + esc(t('link.get')) + '</button>' +
+        '<button class="mini-btn danger" type="button" data-rm="' + esc(f.name) + '">×</button>' +
+        '</div>';
+    }).join('');
+  }
+
+  async function refreshFiles() {
+    if (!Sync.isConnected()) { renderFileList(); return; }
+    var r = await Sync.listFiles();
+    linkFiles = r.ok ? r.files : [];
+    renderFileList();
+  }
+
+  async function uploadToPc(file) {
+    if (!file) return;
+    if (!Sync.isConnected()) { toast(t('link.needConnect')); return; }
+    toast(t('link.uploading', { name: file.name }), 2000);
+    var r = await Sync.uploadFile(file.name, file);
+    if (!r.ok) { toast(t('link.uploadFail', { msg: r.error || 'error' }), 4000); return; }
+    toast(t('link.uploaded', { name: r.data.name }));
+    refreshFiles();
+  }
+
+  async function downloadFromPc(name) {
+    var r = await Sync.downloadFile(name);
+    if (!r.ok) { toast(t('link.downloadFail', { msg: r.error || 'error' }), 4000); return; }
+    var url = URL.createObjectURL(r.blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1500);
+    toast(t('link.downloaded', { name: name }));
+  }
+
   /* ---------- 用量与账单 ---------- */
 
   var DAY_NAMES_ZH = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
@@ -2499,6 +2659,7 @@
     state.settingsTab = name || 'keys';
     renderTabs();
     if (state.settingsTab === 'usage') renderUsagePane();
+    if (state.settingsTab === 'link') { renderLinkPane(); refreshFiles(); }
     el.settings.querySelector('.sheet-body').scrollTop = 0;
   }
 
@@ -2540,6 +2701,7 @@
     setSettingsTab(tab || state.settingsTab || 'keys');
     setPanel(el.settings, true);
     renderUsagePane();
+    renderLinkPane();
   }
 
   function closeSettings() {
@@ -3018,6 +3180,50 @@
       toast(t('period.hidden'), 2500);
     });
 
+    /* 连接页 */
+    el.linkActions.addEventListener('click', async function (e) {
+      var b = e.target.closest ? e.target.closest('[data-link]') : null;
+      if (!b) return;
+      var act = b.dataset.link;
+      if (act === 'pair') { openPairForm(); }
+      else if (act === 'autofill') {
+        /* 如果当前页面就是从桥服务打开的，配对码能直接读到 */
+        var code = await Sync.localPairCode();
+        openPairForm(location.origin.indexOf('http') === 0 ? location.origin : '');
+        if (code) { el.pairCode.value = code; toast(t('link.autofilled')); }
+        else toast(t('link.autofillFail'), 4000);
+      }
+      else if (act === 'sync') { runSync(); }
+      else if (act === 'refresh') { refreshFiles(); }
+      else if (act === 'off') {
+        if (!window.confirm(t('link.disconnectAsk'))) return;
+        Sync.disconnect();
+        linkFiles = [];
+        renderLinkPane();
+        toast(t('link.disconnected'));
+      }
+    });
+    el.btnPair.addEventListener('click', doPair);
+    el.btnPairCancel.addEventListener('click', function () { el.pairForm.hidden = true; });
+    el.pairCode.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); doPair(); }
+    });
+    el.btnPickUpload.addEventListener('click', function () { el.pickUpload.click(); });
+    el.pickUpload.addEventListener('change', function () {
+      var f = el.pickUpload.files && el.pickUpload.files[0];
+      if (f) uploadToPc(f);
+      el.pickUpload.value = '';
+    });
+    el.fileList.addEventListener('click', function (e) {
+      var t2 = e.target.closest ? e.target.closest('button') : null;
+      if (!t2) return;
+      if (t2.dataset.dl) { downloadFromPc(t2.dataset.dl); return; }
+      if (t2.dataset.rm) {
+        if (!window.confirm(t('link.deleteAsk', { name: t2.dataset.rm }))) return;
+        Sync.deleteFile(t2.dataset.rm).then(refreshFiles);
+      }
+    });
+
     /* 用量页 */
     el.btnRefreshBalance.addEventListener('click', refreshBalance);
     el.btnResetUsage.addEventListener('click', function () {
@@ -3211,6 +3417,19 @@
     el.btnSfCancel = $('btnSfCancel');
     el.btnCloseSkills = $('btnCloseSkills');
 
+    el.linkBadge = $('linkBadge');
+    el.linkState = $('linkState');
+    el.linkWhere = $('linkWhere');
+    el.linkActions = $('linkActions');
+    el.pairForm = $('pairForm');
+    el.pairUrl = $('pairUrl');
+    el.pairCode = $('pairCode');
+    el.btnPair = $('btnPair');
+    el.btnPairCancel = $('btnPairCancel');
+    el.fileList = $('fileList');
+    el.btnPickUpload = $('btnPickUpload');
+    el.pickUpload = $('pickUpload');
+
     el.periodBar = $('periodBar');
     el.periodMain = $('periodMain');
     el.periodLabel = $('periodLabel');
@@ -3327,6 +3546,18 @@
         state.secureOn = !!avail;
         renderSecureNote();
       });
+    }
+
+    /* 已配对的话，启动后静默同步一次 */
+    if (Sync.isConnected()) {
+      setTimeout(function () {
+        Sync.syncNow().then(function (r) {
+          if (r && r.ok) {
+            state.index = Store.loadIndex();
+            renderConvList();
+          }
+        });
+      }, 2500);
     }
 
     /* 时段每分钟刷一次，页面一直开着也能看到高峰/空闲切换 */

@@ -131,6 +131,7 @@
       <button type="button" data-act="export"><span data-i18n="menu.export">导出全部</span></button>
       <button type="button" data-act="save-temp" id="menuSaveTemp" hidden><span data-i18n="bar.saveTemp">保存</span></button>
     </div>
+    <input type="file" id="pickUpload" hidden>
     <input type="file" id="pickImages" accept="image/*" multiple hidden>
     <input type="file" id="pickFiles" multiple hidden
            accept=".txt,.md,.markdown,.json,.csv,.log,.js,.ts,.py,.java,.kt,.c,.h,.cpp,.cs,.go,.rs,.html,.css,.xml,.yml,.yaml,.sh,.sql,.ini,.conf,.toml">
@@ -167,6 +168,7 @@
   <div class="tabs" id="settingsTabs" role="tablist">
     <button type="button" role="tab" data-tab="keys" data-i18n="settings.tabKeys">密钥</button>
     <button type="button" role="tab" data-tab="usage" data-i18n="settings.tabUsage">用量</button>
+    <button type="button" role="tab" data-tab="link" data-i18n="settings.tabLink">连接</button>
     <button type="button" role="tab" data-tab="look" data-i18n="settings.tabLook">外观</button>
     <button type="button" role="tab" data-tab="lang" data-i18n="settings.tabLang">语言</button>
     <button type="button" role="tab" data-tab="about" data-i18n="settings.tabAbout">关于</button>
@@ -284,6 +286,52 @@
           <button class="text-btn" id="btnTutorial" type="button" data-i18n="usage.tutorialOpen">查看</button>
         </div>
         <p class="card-sub" id="tutorialWho"></p>
+      </section>
+    </div>
+
+    <!-- 连接 -->
+    <div class="pane" data-pane="link" hidden>
+
+      <section class="card">
+        <div class="card-head">
+          <h2 data-i18n="link.title">手机与电脑</h2>
+          <span class="card-badge" id="linkBadge">—</span>
+        </div>
+        <p class="card-text" id="linkState"></p>
+        <p class="card-sub" id="linkWhere"></p>
+        <div class="link-row" id="linkActions"></div>
+      </section>
+
+      <section class="pform" id="pairForm" hidden>
+        <p class="pform-title" data-i18n="link.pairTitle">配对这台电脑</p>
+        <div class="field">
+          <label for="pairUrl" data-i18n="link.url">电脑地址</label>
+          <input type="text" id="pairUrl" spellcheck="false" inputmode="url" placeholder="http://192.168.1.49:8787">
+          <p class="field-note" data-i18n="link.urlNote">在电脑上运行 server/lan.mjs，终端里会打印这个地址。</p>
+        </div>
+        <div class="field">
+          <label for="pairCode" data-i18n="link.code">配对码</label>
+          <input type="text" id="pairCode" spellcheck="false" inputmode="numeric" maxlength="6" placeholder="123456">
+          <p class="field-note" data-i18n="link.codeNote">终端里那 6 位数字，每次启动服务都会换。</p>
+        </div>
+        <div class="pform-actions">
+          <button class="btn-primary" id="btnPair" type="button" data-i18n="link.doPair">连接</button>
+          <button class="text-btn" id="btnPairCancel" type="button" data-i18n="common.cancel">取消</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2 data-i18n="link.files">文件</h2>
+          <button class="text-btn" id="btnPickUpload" type="button" data-i18n="link.sendFile">发送文件</button>
+        </div>
+        <div class="file-list" id="fileList"></div>
+        <p class="card-note" data-i18n="link.filesNote">文件直接存到电脑的 server/data/files/ 目录，中间不经过任何服务器。</p>
+      </section>
+
+      <section class="card">
+        <div class="card-head"><h2 data-i18n="link.howto">怎么用</h2></div>
+        <ol class="steps" data-i18n-steps="link.steps"></ol>
       </section>
     </div>
 
@@ -503,6 +551,7 @@
 <script src="js/providers.js"></script>
 <script src="js/billing.js"></script>
 <script src="js/bill.js"></script>
+<script src="js/sync.js"></script>
 <script src="js/md.js"></script>
 <script src="js/secure.js"></script>
 <script src="js/store.js"></script>
