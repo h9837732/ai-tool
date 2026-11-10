@@ -35,6 +35,15 @@
     </button>
   </header>
 
+  <div class="update-bar" id="updateBar" hidden>
+    <span class="update-icon">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5"/><path d="M4 19h16"/></svg>
+    </span>
+    <span class="update-text" id="updateText"></span>
+    <button class="update-go" id="updateGo" type="button" data-i18n="update.download">下载</button>
+    <button class="update-x" id="updateClose" type="button" aria-label="关闭" data-i18n-aria="common.close">×</button>
+  </div>
+
   <main class="stream" id="stream" role="log" aria-live="polite">
     <div class="empty" id="emptyState"></div>
   </main>
@@ -288,6 +297,21 @@
         <p class="about-name" data-i18n="app.name">钥匙</p>
         <p class="about-tag" data-i18n="app.tagline">自带 API Key 的 AI 对话</p>
         <p class="about-ver"><span data-i18n="about.version">当前版本</span> <b id="appVersion">1.1.0</b></p>
+        <div class="update-check">
+          <button class="text-btn" id="btnCheckUpdate" type="button" data-i18n="update.check">检查更新</button>
+          <span class="update-result" id="updateResult"></span>
+        </div>
+        <details class="update-src">
+          <summary data-i18n="update.source">更新地址</summary>
+          <div class="field">
+            <input type="text" id="updateUrl" inputmode="url" spellcheck="false"
+                   placeholder="https://…/version.json" data-i18n-ph="update.sourcePh">
+            <p class="field-note" data-i18n="update.sourceNote">留空则用 GitHub Releases。私有仓库需要自己放一个公开的 JSON。</p>
+            <div class="pform-actions">
+              <button class="text-btn" id="btnSaveUpdateUrl" type="button" data-i18n="common.save">保存</button>
+            </div>
+          </div>
+        </details>
       </div>
 
       <section class="sect">
@@ -358,11 +382,13 @@
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
+<script src="js/version.js"></script>
 <script src="js/i18n.js"></script>
 <script src="js/providers.js"></script>
 <script src="js/md.js"></script>
 <script src="js/secure.js"></script>
 <script src="js/store.js"></script>
+<script src="js/update.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

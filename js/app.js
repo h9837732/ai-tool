@@ -5,8 +5,6 @@
 
   /* ---------- 常量 ---------- */
 
-  var APP_VERSION = '1.1.0';
-
   var CHANGELOG = [
     {
       v: '1.1.0',
@@ -1957,6 +1955,57 @@
     startGeneration(node, botMsg, history, idx);
   }
 
+  /* ---------- 更新检查 ---------- */
+
+  var updateState = { latest: '', url: '', notes: '' };
+
+  function showUpdateBar(info) {
+    updateState.latest = info.latest || '';
+    updateState.url = info.url || '';
+    el.updateBar.hidden = false;
+    el.updateText.textContent = t('update.available', { v: updateState.latest });
+  }
+
+  function hideUpdateBar() {
+    el.updateBar.hidden = true;
+  }
+
+  function renderUpdateResult(r) {
+    if (!el.updateResult) return;
+    delete el.updateResult.dataset.new;
+    delete el.updateResult.dataset.err;
+    if (!r) { el.updateResult.textContent = ''; return; }
+    if (r.status === 'skipped') {
+      el.updateResult.textContent = '';
+      return;
+    }
+    if (r.status === 'newer') {
+      el.updateResult.textContent = t('update.available', { v: r.latest });
+      el.updateResult.dataset.new = 'true';
+      return;
+    }
+    if (r.status === 'latest') {
+      el.updateResult.textContent = t('update.latest', { v: r.current || Update.current() });
+      return;
+    }
+    var msg = r.httpStatus === 404 ? t('update.privateHint') : (r.error || 'error');
+    el.updateResult.textContent = t('update.failed', { msg: msg });
+    el.updateResult.dataset.err = 'true';
+  }
+
+  function checkUpdate(force) {
+    if (el.updateResult) el.updateResult.textContent = t('update.checking');
+    return Promise.resolve(Update.check({ force: !!force })).then(function (r) {
+      renderUpdateResult(r);
+      if (r.status === 'newer' && Update.skippedVersion() !== r.latest) {
+        showUpdateBar(r);
+      }
+      return r;
+    }).catch(function (e) {
+      renderUpdateResult({ status: 'error', error: (e && e.message) || 'failed' });
+    });
+  }
+
   /* ---------- 面板 ---------- */
 
   function setPanel(panel, open) {
@@ -2020,7 +2069,8 @@
     }
     fillPrefsForm();
     renderChangelog();
-    if (el.appVersion) el.appVersion.textContent = APP_VERSION;
+    if (el.appVersion) el.appVersion.textContent = Update.current();
+    if (el.updateUrl) el.updateUrl.value = Update.customEndpoint();
     renderSecureNote();
   }
 
@@ -2490,6 +2540,23 @@
       toast(t('toast.deleted'));
     });
 
+    /* 更新 */
+    el.updateGo.addEventListener('click', function () {
+      if (!updateState.url) return;
+      toast(t('update.opening'), 2500);
+      Update.open(updateState.url);
+    });
+    el.updateClose.addEventListener('click', function () {
+      hideUpdateBar();
+      if (updateState.latest) Update.skip(updateState.latest);
+    });
+    el.btnCheckUpdate.addEventListener('click', function () { checkUpdate(true); });
+    el.btnSaveUpdateUrl.addEventListener('click', function () {
+      Update.setCustomEndpoint(el.updateUrl.value.trim());
+      toast(t('update.sourceSaved'));
+      checkUpdate(true);
+    });
+
     el.btnExportAll.addEventListener('click', exportAll);
     el.btnImport.addEventListener('click', function () { el.fileImport.click(); });
     el.fileImport.addEventListener('change', function () {
@@ -2610,6 +2677,15 @@
     el.btnSfCancel = $('btnSfCancel');
     el.btnCloseSkills = $('btnCloseSkills');
 
+    el.updateBar = $('updateBar');
+    el.updateText = $('updateText');
+    el.updateGo = $('updateGo');
+    el.updateClose = $('updateClose');
+    el.btnCheckUpdate = $('btnCheckUpdate');
+    el.updateResult = $('updateResult');
+    el.updateUrl = $('updateUrl');
+    el.btnSaveUpdateUrl = $('btnSaveUpdateUrl');
+
     el.toast = $('toast');
   }
 
@@ -2662,7 +2738,7 @@
     renderEffort();
     renderTabs();
     renderChangelog();
-    if (el.appVersion) el.appVersion.textContent = APP_VERSION;
+    if (el.appVersion) el.appVersion.textContent = Update.current();
     registerSW();
 
     /* 提示条要始终浮在输入区上方，随输入区高度变化 */
@@ -2693,6 +2769,9 @@
         renderSecureNote();
       });
     }
+
+    /* 启动后延迟几秒再查更新，不抢首屏 */
+    setTimeout(function () { checkUpdate(false); }, 3500);
 
     if (!Store.isPersistent()) {
       toast(t('toast.storageWarn'), 9000);

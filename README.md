@@ -20,6 +20,40 @@
 
 ---
 
+## 更新提示是怎么做的
+
+App 启动 3.5 秒后查一次版本（6 小时内不重复查），发现新版就在顶栏下方出一条提示：
+「发现新版本 1.2.0　[下载]　×」。点「下载」交给系统浏览器打开 APK 地址，点 × 记住跳过这个版本。
+设置 → 关于 里也有「检查更新」按钮，随时手动查。
+
+版本号来源只有一个：`package.json` 的 `version`。`build.mjs` 会把它写成 `js/version.js`，
+界面显示的当前版本、和远端比对用的都是它，不会出现两处不一致。
+
+### 数据源（按顺序）
+
+1. **自定义 JSON**（设置 → 关于 → 更新地址里填）
+2. **GitHub Releases API**（`repos/h9837732/ai-tool/releases/latest`）
+
+| 场景 | 能不能只用默认源 |
+|---|---|
+| 仓库公开 + 打了 `v*` 标签 | ✅ 零配置，直接能用 |
+| 仓库私有 | ❌ 匿名请求返回 404，需要填自定义地址 |
+
+**私有仓库怎么办**：随便找个公开的地方放一个 JSON，把地址填进「更新地址」即可。
+
+```json
+{ "version": "1.2.0", "url": "https://你的下载地址/keyapp-1.2.0.apk", "notes": "改了什么" }
+```
+
+可选：GitHub Gist（新建 secret gist 后点 Raw 拿链接）、Cloudflare Pages、对象存储，都行。
+JSON 必须返回 `access-control-allow-origin`，否则 App 里的 `fetch` 读不到。
+
+### 一个必须知道的坑
+
+**签名要一致，否则装不上。** 现在的 `钥匙-vX-debug.apk` 是 debug 包，签名由 Android 的调试证书生成。
+如果之后换成签名 release 包，**两者不能互相覆盖安装**，手机会报「应用未安装 / 签名不一致」，
+必须卸载重装（对话和密钥会一起没）。所以要么一直用 debug 包，要么从一开始就用同一个 keystore。
+
 ## 三种用法
 
 | 用法 | 怎么做 | 适用 |
@@ -270,6 +304,8 @@ Claude 开思考时只接受 `temperature=1`，所以这时自动不发该字段
 F:\AI Tool\
 ├── index.html                  页面骨架
 ├── css/app.css                 全部样式
+├── js/version.js               版本号（build.mjs 从 package.json 生成）
+├── js/update.js                更新检查（GitHub Releases / 自定义 JSON）
 ├── js/i18n.js                  中英文文案表 ← 加语言或改文案只改这里
 ├── js/secure.js                原生能力封装（钥匙串加密 + 原生 HTTP）
 ├── js/providers.js             服务商预设表 ← 加新服务商只改这里

@@ -1475,3 +1475,96 @@ input[type="color"]::-webkit-color-swatch {
 /* 抽屉底部按钮更紧凑，放得下四项 */
 .drawer-foot { gap: 5px; }
 .drawer-foot .text-btn { padding: 7px 9px; font-size: 12px; }
+
+/* ---------- 更新提示 ---------- */
+
+.update-bar {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+  font-size: 13px;
+}
+.update-bar[hidden] { display: none; }
+
+.update-icon {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  color: var(--accent);
+}
+.update-icon svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.update-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.update-go {
+  flex: 0 0 auto;
+  height: 26px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.update-go:hover { filter: brightness(1.06); }
+
+.update-x {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 17px;
+  line-height: 1;
+  padding: 0;
+}
+.update-x:hover { color: var(--text); }
+
+.update-check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+.update-result {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+.update-result[data-new="true"] { color: var(--accent); }
+.update-result[data-err="true"] { color: var(--danger); }
+
+.update-src { margin-top: 12px; }
+.update-src summary {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.update-src summary:hover { color: var(--accent); }
+.update-src .field { margin-top: 10px; }
