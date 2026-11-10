@@ -7,6 +7,26 @@
 
   var CHANGELOG = [
     {
+      v: '1.3.4',
+      date: '2026-11',
+      zh: [
+        '电脑端和手机端彻底分开：电脑端只显示配对码和已配对的手机，手机端只显示扫描和配对',
+        '手机端支持扫描局域网，自动找到电脑，不用再输网址',
+        '电脑端可以断开某台手机（两步确认）',
+        '所有确认都改成两步点按，不再依赖浏览器弹窗（应用模式下它可能不弹）',
+        '修了断开连接后界面不刷新的问题',
+        '新增「打包电脑端.bat」，双击就能重新出 exe'
+      ],
+      en: [
+        'Desktop and phone are now clearly separated: desktop shows the pairing code and paired phones, phone shows scan and pairing',
+        'Phone can scan the LAN to find the desktop, no URL typing',
+        'Desktop can disconnect a phone (two-step confirm)',
+        'All confirmations are two-step button presses instead of browser dialogs, which may not appear in app mode',
+        'Fixed the link panel not refreshing after disconnecting',
+        'New build script: double-click to rebuild the exe'
+      ]
+    },
+    {
       v: '1.3.3',
       date: '2026-11',
       zh: [
@@ -554,25 +574,7 @@
     toast(wasEditing ? t('toast.saved') : t('skills.enabled', { name: label }));
   }
 
-  function deleteProfile(id) {
-    var p = null;
-    for (var i = 0; i < state.profiles.length; i++) {
-      if (state.profiles[i].id === id) { p = state.profiles[i]; break; }
-    }
-    if (!p) return;
-    if (!window.confirm(t('keys.deleteAsk', { name: profileLabel(p) }))) return;
-    state.profiles = state.profiles.filter(function (x) { return x.id !== id; });
-    if (state.editingProfileId === id) closeProfileForm();
-    saveProfiles();
-    if (state.activeId === id) {
-      state.activeId = state.profiles.length ? state.profiles[0].id : '';
-      Store.saveActiveProfile(state.activeId);
-    }
-    renderProfileList();
-    renderHint();
-    renderEmpty();
-    toast(t('toast.deleted'));
-  }
+  function deleteProfile(id) { doDeleteProfile(id); }
 
   /* 从服务商拉取模型列表。浏览器直接拿，跨域失败时 App 里改走原生请求。
      返回 { ok, list, error, status }，不抛异常。 */
@@ -893,20 +895,7 @@
     renderEmpty();
   }
 
-  function deleteSkill(id) {
-    var s = null;
-    for (var i = 0; i < state.skills.length; i++) {
-      if (state.skills[i].id === id) { s = state.skills[i]; break; }
-    }
-    if (!s) return;
-    if (!window.confirm(t('skills.deleteAsk', { name: s.name || '' }))) return;
-    state.skills = state.skills.filter(function (x) { return x.id !== id; });
-    if (state.editingSkillId === id) closeSkillForm();
-    saveSkills();
-    renderSkillList();
-    renderHint();
-    renderEmpty();
-  }
+  function deleteSkill(id) { doDeleteSkill(id); }
 
   function toggleSkill(id) {
     for (var i = 0; i < state.skills.length; i++) {
@@ -1267,10 +1256,9 @@
     var tooBig = list.filter(function (f) { return f.size > MAX_TEXT_BYTES; });
     if (tooBig.length) {
       var names = tooBig.map(function (f) { return f.name; }).join(', ');
-      if (!window.confirm(t('toast.bigFile', { names: names }))) {
-        list = list.filter(function (f) { return f.size <= MAX_TEXT_BYTES; });
-        if (!list.length) return;
-      }
+      toast(t('toast.bigFile', { names: names }), 4000);
+      list = list.filter(function (f) { return f.size <= MAX_TEXT_BYTES; });
+      if (!list.length) return;
     }
 
     var jobs = list.map(function (f) {
@@ -1520,20 +1508,7 @@
     renderBarState();
   }
 
-  function removeConv(id) {
-    var conv = Store.loadConv(id);
-    var name = conv ? conv.title : '这条对话';
-    if (!window.confirm('删除「' + name + '」？删掉就找不回来了。')) return;
-    Store.removeConv(id);
-    state.index = state.index.filter(function (x) { return x.id !== id; });
-    Store.saveIndex(state.index);
-    if (state.conv && state.conv.id === id) {
-      if (state.index.length) openConv(state.index[0].id);
-      else newConv();
-    }
-    renderConvList();
-    toast(t('toast.deleted'));
-  }
+  function removeConv(id) { doRemoveConv(id); }
 
   function renameConv(id) {
     var conv = Store.loadConv(id);
@@ -1570,7 +1545,8 @@
   function leaveTempIfNeeded(next) {
     var conv = state.conv;
     if (conv && conv.temp && conv.messages.length) {
-      if (!window.confirm(t('toast.leaveTemp'))) return;
+      /* 离开提醒也走 toast 而不是 confirm，避免无反馈 */
+      toast(t('toast.leaveTemp'), 3200);
     }
     next();
   }
@@ -2251,103 +2227,332 @@
     startGeneration(node, botMsg, history, idx);
   }
 
-  /* ---------- 局域网连接 ---------- */
+  /* ---------- 两步确认 ----------
+     不依赖 window.confirm：Edge 的 --app 模式下它可能不弹窗，
+     用户点按钮会像没反应。改成按钮自己进入「待确认」状态，
+     3 秒内再点一次才执行；超时或点别处自动复原。 ---------- */
 
-  var linkFiles = [];
+  var pendingConfirm = { el: null, timer: 0, orig: '' };
 
-  /* 这台设备如果是「电脑端」，把配对码直接显示在界面里 ——
-     电脑端没有独立控制窗，配对信息只能在这里给。 */
-  async function renderHostCard() {
-    if (!el.hostCard) return;
-    var info = null;
-    try {
-      var res = await fetch('/api/code');
-      if (res.ok) info = await res.json();
-    } catch (e) {
-      info = null;
+  function clearPendingConfirm() {
+    if (pendingConfirm.el) {
+      try {
+        pendingConfirm.el.textContent = pendingConfirm.orig;
+        delete pendingConfirm.el.dataset.confirm;
+      } catch (e) { /* 节点可能已被移除 */ }
     }
-    if (!info || !info.code) { el.hostCard.hidden = true; return; }
+    clearTimeout(pendingConfirm.timer);
+    pendingConfirm.el = null;
+    pendingConfirm.timer = 0;
+  }
 
-    el.hostCard.hidden = false;
-    el.hostCode.textContent = info.code;
-    el.hostUrl.textContent = (info.url || '') + '　·　' + t('host.paired', { n: info.devices || 0 });
-    el.hostBadge.textContent = t('host.badge');
+  /* 两步确认：返回 true 表示可以执行 */
+  function confirmByButton(btn, confirmText, run) {
+    if (!btn) { run(); return; }
+    if (btn.dataset.confirm === 'true') {
+      clearPendingConfirm();
+      run();
+      return;
+    }
+    clearPendingConfirm();
+    pendingConfirm.el = btn;
+    pendingConfirm.orig = btn.textContent;
+    btn.dataset.confirm = 'true';
+    btn.textContent = confirmText;
+    pendingConfirm.timer = setTimeout(clearPendingConfirm, 3000);
+  }
+
+  /* ---------- 两步确认的实际执行体 ---------- */
+
+  function doDeleteProfile(id) {
+    var p = null;
+    for (var i = 0; i < state.profiles.length; i++) {
+      if (state.profiles[i].id === id) { p = state.profiles[i]; break; }
+    }
+    if (!p) return;
+    state.profiles = state.profiles.filter(function (x) { return x.id !== id; });
+    if (state.editingProfileId === id) closeProfileForm();
+    saveProfiles();
+    if (state.activeId === id) {
+      state.activeId = state.profiles.length ? state.profiles[0].id : '';
+      Store.saveActiveProfile(state.activeId);
+    }
+    renderProfileList();
+    renderHint();
+    renderEmpty();
+    toast(t('toast.deleted'));
+  }
+
+  function doDeleteSkill(id) {
+    state.skills = state.skills.filter(function (x) { return x.id !== id; });
+    if (state.editingSkillId === id) closeSkillForm();
+    saveSkills();
+    renderSkillList();
+    renderHint();
+    renderEmpty();
+    toast(t('toast.deleted'));
+  }
+
+  function doRemoveConv(id) {
+    Store.removeConv(id);
+    state.index = state.index.filter(function (x) { return x.id !== id; });
+    Store.saveIndex(state.index);
+    if (state.conv && state.conv.id === id) {
+      if (state.index.length) openConv(state.index[0].id);
+      else newConv();
+    }
+    renderConvList();
+    toast(t('toast.deleted'));
+  }
+
+  function clearAllKeys() {
+    state.profiles = [];
+    state.activeId = '';
+    saveProfiles();
+    Store.saveActiveProfile('');
+    closeProfileForm();
+    renderProfileList();
+    renderHint();
+    renderEmpty();
+    openProfileForm('');
+    toast(t('toast.deleted'));
+  }
+
+  /* 断开与电脑的连接（两步确认，不用 window.confirm） */
+  function askDisconnect() {
+    var btn = document.querySelector('#clientActions [data-link="off"]');
+    confirmByButton(btn, t('link.disconnectConfirm'), function () {
+      Sync.disconnect();
+      linkFiles = [];
+      scanState = { running: false, done: 0, total: 0, found: [] };
+      renderClientSide();
+      toast(t('link.disconnected'));
+    });
+  }
+
+  /* 删除电脑上的文件（两步确认） */
+  function askDeleteFile(name, btn) {
+    confirmByButton(btn, '×?', function () {
+      if (linkRole === 'host') {
+        fetch('/api/host/file/' + encodeURIComponent(name), { method: 'DELETE' })
+          .then(function () { renderHostSide(); });
+        return;
+      }
+      Sync.deleteFile(name).then(refreshFiles);
+    });
+  }
+
+  /* 断开某台手机（电脑端） */
+  function kickDevice(tail, btn) {
+    confirmByButton(btn, t('host.kickConfirm'), function () {
+      fetch('/api/host/kick', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ tail: tail })
+      }).then(function (res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.json();
+      }).then(function (j) {
+        toast(t('host.kicked', { n: j.removed || 0 }));
+        renderHostSide();
+      }).catch(function () {
+        toast(t('host.kickFail'), 4000);
+      });
+    });
+  }
+
+  /* ---------- 局域网连接 ----------
+     这台设备有两种角色，界面必须分开：
+       电脑端（host）：本机就是服务端，显示配对码、已配对的手机
+       手机端（client）：连别人的服务端，显示扫描 / 配对 / 同步
+
+     判断方式：能读到 /api/code 就是 host（那个接口只允许本机访问）。
+     手机 App 走 Capacitor，读不到，直接归为 client。 */
+
+  var linkRole = null;     // 'host' | 'client'
+  var hostInfo = null;
+  var hostDevices = [];
+  var linkFiles = [];      // 文件列表（两端共用）
+  var scanState = { running: false, done: 0, total: 0, found: [] };
+
+  async function detectRole() {
+    if (linkRole) return linkRole;
+    if (window.Capacitor && Capacitor.isNativePlatform && Capacitor.isNativePlatform()) {
+      linkRole = 'client';
+      return linkRole;
+    }
+    try {
+      var res = await fetch('/api/code', { cache: 'no-store' });
+      if (res.ok) {
+        var j = await res.json();
+        if (j && j.code) {
+          linkRole = 'host';
+          hostInfo = j;
+          /* 这台机器就是服务端，不该再「连接自己」。
+             历史上测试留下的 localhost 连接要清掉，否则一打开就是已连接。 */
+          var c = Sync.connection();
+          if (c && /^http:\/\/(localhost|127\.0\.0\.1)[:/]/.test(c.url)) {
+            Sync.disconnect();
+          }
+          return linkRole;
+        }
+      }
+    } catch (e) { /* 落到 client */ }
+    linkRole = 'client';
+    return linkRole;
   }
 
   function renderLinkPane() {
     if (!el.linkBadge) return;
-    var on = Sync.isConnected();
-    var c = Sync.connection();
+    if (!linkRole) { detectRole().then(renderLinkPane); return; }
 
-    el.linkBadge.textContent = on ? t('link.connected') : t('link.offline');
-    el.linkBadge.dataset.peak = on ? 'false' : 'true';
+    el.linkHost.hidden = linkRole !== 'host';
+    el.linkClient.hidden = linkRole !== 'client';
+    el.linkBadge.textContent = linkRole === 'host' ? t('link.roleHost') : t('link.roleClient');
+    el.linkBadge.dataset.peak = linkRole === 'host' ? 'false' : 'true';
 
-    if (!on) {
-      el.linkState.textContent = t('link.notConnectedText');
-      el.linkWhere.textContent = '';
-      el.linkActions.innerHTML =
-        '<button class="link-btn" type="button" data-link="pair">' + esc(t('link.startPair')) + '</button>'
-        + '<button class="link-btn" type="button" data-link="autofill">' + esc(t('link.autofill')) + '</button>';
-      el.pairForm.hidden = true;
-      el.fileList.innerHTML = '<p class="none">' + esc(t('link.needConnect')) + '</p>';
-      return;
-    }
-
-    el.linkState.textContent = t('link.connectedText', {
-      device: c.deviceName || '-',
-      time: c.lastSyncAt ? timeLabel(c.lastSyncAt) : t('link.never')
-    });
-    el.linkWhere.textContent = c.url;
-    el.linkActions.innerHTML =
-      '<button class="link-btn" type="button" data-link="sync">' + esc(t('link.syncNow')) + '</button>'
-      + '<button class="link-btn" type="button" data-link="refresh">' + esc(t('link.refreshFiles')) + '</button>'
-      + '<button class="link-btn" type="button" data-link="off">' + esc(t('link.disconnect')) + '</button>';
-    el.pairForm.hidden = true;
-    if (!linkFiles.length) el.fileList.innerHTML = '<p class="none">' + esc(t('link.noFiles')) + '</p>';
+    if (linkRole === 'host') renderHostSide();
+    else renderClientSide();
   }
 
-  var nearbyPeers = [];
+  /* ---------- 电脑端：配对码 + 已配对的手机 ---------- */
 
-  async function refreshNearby() {
-    if (!el.nearbyCard) return;
-    if (!Sync.isConnected()) { el.nearbyCard.hidden = true; return; }
-
-    el.nearbyCard.hidden = false;
-    el.nearbyHint.textContent = t('link.scanning');
-    var r = await Sync.peers();
-    if (!r.ok) {
-      el.nearbyHint.textContent = linkErrorText(r.error) || t('link.scanFail', { msg: r.error || 'error' });
-      el.nearbyList.innerHTML = '';
+  async function renderHostSide() {
+    var info = null;
+    try {
+      var res = await fetch('/api/host/info', { cache: 'no-store' });
+      if (res.ok) info = await res.json();
+    } catch (e) {
+      info = null;
+    }
+    if (!info) {
+      el.hostCode.textContent = '------';
+      el.hostUrl.textContent = t('host.unreachable');
+      el.hostMeta.textContent = '';
       return;
     }
-    nearbyPeers = r.peers || [];
-    if (!nearbyPeers.length) {
-      el.nearbyHint.textContent = t('link.scanEmpty');
-      el.nearbyList.innerHTML = '';
+    hostInfo = info;
+
+    el.hostCode.textContent = info.code || '------';
+    el.hostUrl.textContent = info.url || '';
+    el.hostMeta.textContent = t('host.meta', { n: (info.devices || []).length });
+
+    hostDevices = info.devices || [];
+    renderHostDevices();
+    linkFiles = info.files || [];
+    renderFileList();
+  }
+
+  function renderHostDevices() {
+    if (!el.hostDevices) return;
+    if (!hostDevices.length) {
+      el.hostDevices.innerHTML = '<p class="none">' + esc(t('host.noDevices')) + '</p>';
       return;
     }
-    el.nearbyHint.textContent = t('link.scanFound', { n: nearbyPeers.length });
-    el.nearbyList.innerHTML = nearbyPeers.map(function (p, i) {
+    el.hostDevices.innerHTML = hostDevices.map(function (d) {
       return '<div class="file-row">' +
-        '<span class="file-name">' + esc(p.alias || p.address) + '</span>' +
-        '<span class="file-size">' + esc(p.address + ':' + p.port) + '</span>' +
-        '<button class="mini-btn" type="button" data-peer="' + i + '">' + esc(t('link.useThis')) + '</button>' +
+        '<span class="file-name">' + esc(d.device || 'device') + '</span>' +
+        '<span class="file-size">' + esc(timeLabel(d.at) || '') + '</span>' +
+        '<button class="mini-btn danger" type="button" data-kick="' + esc(d.tail) + '">' + esc(t('host.kick')) + '</button>' +
         '</div>';
     }).join('');
   }
 
+  /* ---------- 手机端：扫描 + 配对 ---------- */
+
+  function renderClientSide() {
+    var on = Sync.isConnected();
+    var c = Sync.connection();
+
+    el.clientBadge.textContent = on ? t('link.connected') : t('link.offline');
+    el.clientBadge.dataset.peak = on ? 'false' : 'true';
+
+    if (on) {
+      el.clientState.textContent = t('link.connectedText', {
+        device: c.deviceName || '-',
+        time: c.lastSyncAt ? timeLabel(c.lastSyncAt) : t('link.never')
+      });
+      el.clientWhere.textContent = c.url;
+      el.clientActions.innerHTML =
+        '<button class="link-btn" type="button" data-link="sync">' + esc(t('link.syncNow')) + '</button>'
+        + '<button class="link-btn" type="button" data-link="off">' + esc(t('link.disconnect')) + '</button>';
+      el.scanWrap.hidden = true;
+      refreshFiles();
+    } else {
+      el.clientState.textContent = t('link.notConnectedText');
+      el.clientWhere.textContent = '';
+      el.clientActions.innerHTML =
+        '<button class="link-btn" type="button" data-link="scan">' + esc(t('link.scan')) + '</button>'
+        + '<button class="link-btn" type="button" data-link="manual">' + esc(t('link.manual')) + '</button>';
+      el.scanWrap.hidden = false;
+      el.fileList.innerHTML = '<p class="none">' + esc(t('link.needConnect')) + '</p>';
+    }
+
+    if (scanState.running) {
+      el.scanStatus.textContent = t('link.scanningCount', { done: scanState.done, total: scanState.total });
+    } else if (scanState.found.length) {
+      el.scanStatus.textContent = t('link.scanFound', { n: scanState.found.length });
+    } else if (scanState.done) {
+      el.scanStatus.textContent = t('link.scanEmpty');
+    } else {
+      el.scanStatus.textContent = t('link.scanHint');
+    }
+    renderScanList();
+  }
+
+  function renderScanList() {
+    el.scanList.innerHTML = scanState.found.map(function (p, i) {
+      return '<div class="file-row">' +
+        '<span class="file-name">' + esc(p.alias) + '</span>' +
+        '<span class="file-size">' + esc(p.ip + ':' + p.port) + '</span>' +
+        '<button class="mini-btn" type="button" data-scanpick="' + i + '">' + esc(t('link.useThis')) + '</button>' +
+        '</div>';
+    }).join('');
+  }
+
+  async function runScan() {
+    if (scanState.running) return;
+    var prefixes = Sync.lanPrefixes();
+    if (!prefixes.length) {
+      /* App 里不知道网段：把常见家用网段都试一遍 */
+      prefixes = ['192.168.1', '192.168.0', '192.168.2', '192.168.31', '10.0.0'];
+    }
+    scanState = { running: true, done: 0, total: 0, found: [] };
+    el.scanWrap.hidden = false;
+    renderClientSide();
+
+    var found = await Sync.scanLan({
+      prefixes: prefixes,
+      port: 8787,
+      concurrency: 48,
+      timeoutMs: 700,
+      onProgress: function (done, total, hits) {
+        scanState.done = done;
+        scanState.total = total;
+        scanState.found = hits.slice();
+        el.scanStatus.textContent = t('link.scanningCount', { done: done, total: total });
+        if (hits.length) renderScanList();
+      }
+    });
+
+    scanState.running = false;
+    scanState.found = found;
+    renderClientSide();
+  }
+
   function openPairForm(prefillUrl) {
     el.pairForm.hidden = false;
-    el.pairUrl.value = prefillUrl || (Sync.connection() ? Sync.connection().url : '') || '';
+    el.pairUrl.value = prefillUrl || '';
     el.pairCode.value = '';
-    el.pairCode.focus();
+    if (prefillUrl) el.pairCode.focus();
+    else el.pairUrl.focus();
   }
 
   async function doPair() {
     var url = el.pairUrl.value.trim();
     var code = el.pairCode.value.trim();
-    if (!url) { el.pairUrl.focus(); return; }
-    if (!code) { el.pairCode.focus(); return; }
+    if (!url) { el.pairUrl.focus(); toast(t('link.needUrl')); return; }
+    if (!code) { el.pairCode.focus(); toast(t('link.needCode')); return; }
 
     el.btnPair.disabled = true;
     el.btnPair.textContent = t('link.pairing');
@@ -2363,18 +2568,9 @@
       return;
     }
     toast(t('link.paired'));
-    renderLinkPane();
+    el.pairForm.hidden = true;
+    renderClientSide();
     runSync();
-  }
-
-  /* 把 reauth 翻译成人话，并顺手把界面切回「未连接」 */
-  function linkErrorText(err) {
-    if (err === 'reauth') {
-      renderLinkPane();
-      renderHostCard();
-      return t('link.reauth');
-    }
-    return null;
   }
 
   async function runSync() {
@@ -2385,16 +2581,26 @@
       toast(linkErrorText(r.error) || t('link.syncFail', { msg: r.error || 'error' }), 6000);
       return;
     }
-    /* 同步回来的对话要在界面上体现 */
     state.index = Store.loadIndex();
     renderConvList();
     renderHint();
-    renderLinkPane();
+    renderClientSide();
     toast(t('link.synced', {
       pulled: r.result.pulled || 0,
       total: r.result.total || 0
     }), 3500);
   }
+
+  function linkErrorText(err) {
+    if (err === 'reauth') {
+      linkRole = null;
+      renderLinkPane();
+      return t('link.reauth');
+    }
+    return null;
+  }
+
+  /* ---------- 文件（两端共用一个列表） ---------- */
 
   function fmtSize(n) {
     var v = Number(n) || 0;
@@ -2420,6 +2626,7 @@
   }
 
   async function refreshFiles() {
+    if (linkRole === 'host') { renderHostSide(); return; }
     if (!Sync.isConnected()) { renderFileList(); return; }
     var r = await Sync.listFiles();
     linkFiles = r.ok ? r.files : [];
@@ -2428,8 +2635,27 @@
 
   async function uploadToPc(file) {
     if (!file) return;
-    if (!Sync.isConnected()) { toast(t('link.needConnect')); return; }
     toast(t('link.uploading', { name: file.name }), 2000);
+
+    if (linkRole === 'host') {
+      /* 电脑端：直接写自己的目录，不经过网络 */
+      try {
+        var res = await fetch('/api/host/file', {
+          method: 'POST',
+          headers: { 'x-filename': encodeURIComponent(file.name || 'file') },
+          body: file
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        var j = await res.json();
+        toast(t('link.uploaded', { name: j.name }));
+        renderHostSide();
+      } catch (e) {
+        toast(t('link.uploadFail', { msg: e.message || 'error' }), 4000);
+      }
+      return;
+    }
+
+    if (!Sync.isConnected()) { toast(t('link.needConnect')); return; }
     var r = await Sync.uploadFile(file.name, file);
     if (!r.ok) { toast(t('link.uploadFail', { msg: r.error || 'error' }), 4000); return; }
     toast(t('link.uploaded', { name: r.data.name }));
@@ -2437,6 +2663,15 @@
   }
 
   async function downloadFromPc(name) {
+    if (linkRole === 'host') {
+      var a0 = document.createElement('a');
+      a0.href = '/api/host/file/' + encodeURIComponent(name);
+      a0.download = name;
+      document.body.appendChild(a0);
+      a0.click();
+      document.body.removeChild(a0);
+      return;
+    }
     var r = await Sync.downloadFile(name);
     if (!r.ok) { toast(t('link.downloadFail', { msg: r.error || 'error' }), 4000); return; }
     var url = URL.createObjectURL(r.blob);
@@ -2768,7 +3003,7 @@
     state.settingsTab = name || 'keys';
     renderTabs();
     if (state.settingsTab === 'usage') renderUsagePane();
-    if (state.settingsTab === 'link') { renderLinkPane(); renderHostCard(); refreshFiles(); refreshNearby(); }
+    if (state.settingsTab === 'link') { renderLinkPane(); }
     el.settings.querySelector('.sheet-body').scrollTop = 0;
   }
 
@@ -3260,7 +3495,11 @@
 
     el.btnClearKeys.addEventListener('click', function () {
       if (!state.profiles.length) { toast(t('keys.empty')); return; }
-      if (!window.confirm(t('keys.clearAllAsk', { n: state.profiles.length }))) return;
+      var n = state.profiles.length;
+      confirmByButton(el.btnClearKeys, t('keys.clearAllConfirm'), function () {
+        clearAllKeys();
+      });
+      return;
       state.profiles = [];
       state.activeId = '';
       saveProfiles();
@@ -3290,42 +3529,43 @@
     });
 
     /* 连接页 */
-    el.linkActions.addEventListener('click', async function (e) {
-      var b = e.target.closest ? e.target.closest('[data-link]') : null;
+    el.linkHost.addEventListener('click', function (e) {
+      var b = e.target.closest ? e.target.closest('button') : null;
       if (!b) return;
+      if (b.id === 'btnCopyHostUrl') {
+        copyText((hostInfo && hostInfo.url) || '');
+      } else if (b.id === 'btnRefreshDevices') {
+        renderHostSide();
+        toast(t('common.refresh'));
+      } else if (b.dataset.kick) {
+        kickDevice(b.dataset.kick, b);
+      }
+    });
+
+    el.linkClient.addEventListener('click', function (e) {
+      var b = e.target.closest ? e.target.closest('button') : null;
+      if (!b) return;
+
+      if (b.dataset.scanpick !== undefined) {
+        var hit = scanState.found[Number(b.dataset.scanpick)];
+        if (hit) { openPairForm(hit.url || ('http://' + hit.ip + ':' + hit.port)); toast(t('link.fillFromPeer', { name: hit.alias })); }
+        return;
+      }
+
       var act = b.dataset.link;
-      if (act === 'pair') { openPairForm(); }
-      else if (act === 'autofill') {
-        /* 如果当前页面就是从桥服务打开的，配对码能直接读到 */
-        var code = await Sync.localPairCode();
-        openPairForm(location.origin.indexOf('http') === 0 ? location.origin : '');
-        if (code) { el.pairCode.value = code; toast(t('link.autofilled')); }
-        else toast(t('link.autofillFail'), 4000);
-      }
+      if (!act) return;
+      if (act === 'scan') { runScan(); }
+      else if (act === 'manual') { openPairForm(''); }
       else if (act === 'sync') { runSync(); }
-      else if (act === 'refresh') { refreshFiles(); }
-      else if (act === 'off') {
-        if (!window.confirm(t('link.disconnectAsk'))) return;
-        Sync.disconnect();
-        linkFiles = [];
-        renderLinkPane();
-        toast(t('link.disconnected'));
-      }
+      else if (act === 'off') { askDisconnect(); }
     });
-    el.btnScanNearby.addEventListener('click', refreshNearby);
-    el.nearbyList.addEventListener('click', function (e) {
-      var b = e.target.closest ? e.target.closest('[data-peer]') : null;
-      if (!b) return;
-      var p = nearbyPeers[Number(b.dataset.peer)];
-      if (!p) return;
-      openPairForm('http://' + p.address + ':' + p.port);
-      toast(t('link.fillFromPeer', { name: p.alias || p.address }));
-    });
+
     el.btnPair.addEventListener('click', doPair);
     el.btnPairCancel.addEventListener('click', function () { el.pairForm.hidden = true; });
     el.pairCode.addEventListener('keydown', function (e) {
       if (e.key === 'Enter') { e.preventDefault(); doPair(); }
     });
+
     el.btnPickUpload.addEventListener('click', function () { el.pickUpload.click(); });
     el.pickUpload.addEventListener('change', function () {
       var f = el.pickUpload.files && el.pickUpload.files[0];
@@ -3333,21 +3573,23 @@
       el.pickUpload.value = '';
     });
     el.fileList.addEventListener('click', function (e) {
-      var t2 = e.target.closest ? e.target.closest('button') : null;
-      if (!t2) return;
-      if (t2.dataset.dl) { downloadFromPc(t2.dataset.dl); return; }
-      if (t2.dataset.rm) {
-        if (!window.confirm(t('link.deleteAsk', { name: t2.dataset.rm }))) return;
-        Sync.deleteFile(t2.dataset.rm).then(refreshFiles);
-      }
+      var b = e.target.closest ? e.target.closest('button') : null;
+      if (!b) return;
+      if (b.dataset.dl) { downloadFromPc(b.dataset.dl); return; }
+      if (b.dataset.rm) { askDeleteFile(b.dataset.rm, b); }
     });
 
-    /* 用量页 */
+    /* 用量页 */    /* 用量页 */
     el.btnRefreshBalance.addEventListener('click', refreshBalance);
     el.btnResetUsage.addEventListener('click', function () {
       var p = activeProfile();
       if (!p) return;
-      if (!window.confirm(t('usage.resetAsk'))) return;
+      confirmByButton(el.btnResetUsage, t('usage.resetConfirm'), function () {
+        Bill.resetUsage(p.id);
+        renderUsageStats();
+        toast(t('toast.deleted'));
+      });
+      return;
       Bill.resetUsage(p.id);
       renderUsageStats();
       toast(t('toast.deleted'));
@@ -3535,18 +3777,21 @@
     el.btnSfCancel = $('btnSfCancel');
     el.btnCloseSkills = $('btnCloseSkills');
 
-    el.hostCard = $('hostCard');
+    // linkRole 是模块级变量，不挂在 el 上
+    el.linkBadge = $('linkBadge');
+    el.linkHost = $('linkHost');
+    el.linkClient = $('linkClient');
     el.hostCode = $('hostCode');
     el.hostUrl = $('hostUrl');
-    el.hostBadge = $('hostBadge');
-    el.nearbyCard = $('nearbyCard');
-    el.nearbyHint = $('nearbyHint');
-    el.nearbyList = $('nearbyList');
-    el.btnScanNearby = $('btnScanNearby');
-    el.linkBadge = $('linkBadge');
-    el.linkState = $('linkState');
-    el.linkWhere = $('linkWhere');
-    el.linkActions = $('linkActions');
+    el.hostMeta = $('hostMeta');
+    el.hostDevices = $('hostDevices');
+    el.clientBadge = $('clientBadge');
+    el.clientState = $('clientState');
+    el.clientWhere = $('clientWhere');
+    el.clientActions = $('clientActions');
+    el.scanWrap = $('scanWrap');
+    el.scanStatus = $('scanStatus');
+    el.scanList = $('scanList');
     el.pairForm = $('pairForm');
     el.pairUrl = $('pairUrl');
     el.pairCode = $('pairCode');

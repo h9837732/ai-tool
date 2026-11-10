@@ -298,6 +298,111 @@
     }
   }
 
+
+  /* ---------- 电脑端：已配对的手机 ---------- */
+
+  async function devices() {
+    if (!isConnected()) return { ok: false, error: 'notconnected' };
+    try {
+      var res = await fetch(conn.url + '/api/devices', { headers: headers() });
+      if (authFail(res)) return { ok: false, error: 'reauth' };
+      if (!res.ok) return { ok: false, error: 'HTTP ' + res.status };
+      var j = await res.json();
+      return { ok: true, devices: (j && j.devices) || [] };
+    } catch (e) {
+      return { ok: false, error: 'network' };
+    }
+  }
+
+  async function kickDevice(tail) {
+    if (!isConnected()) return { ok: false, error: 'notconnected' };
+    try {
+      var res = await fetch(conn.url + '/api/devices', {
+        method: 'DELETE',
+        headers: headers({ 'content-type': 'application/json' }),
+        body: JSON.stringify({ tail: tail })
+      });
+      if (authFail(res)) return { ok: false, error: 'reauth' };
+      if (!res.ok) return { ok: false, error: 'HTTP ' + res.status };
+      return { ok: true, data: await res.json() };
+    } catch (e) {
+      return { ok: false, error: 'network' };
+    }
+  }
+
+  /* ---------- 免认证探测：扫描局域网用 ---------- */
+
+  /* 打一台机器的 /api/ping，超时很短。命中返回设备信息，否则 null。 */
+  function probe(ip, port, timeoutMs) {
+    port = port || 8787;
+    var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    var timer = setTimeout(function () { if (ctrl) ctrl.abort(); }, timeoutMs || 700);
+    return fetch('http://' + ip + ':' + port + '/api/ping', {
+      signal: ctrl ? ctrl.signal : undefined,
+      cache: 'no-store'
+    }).then(function (res) {
+      clearTimeout(timer);
+      if (!res.ok) return null;
+      return res.json().then(function (j) {
+        return j && j.app === 'keyapp' ? { ip: ip, port: port, alias: j.alias || ip, url: j.url || ('http://' + ip + ':' + port) } : null;
+      });
+    }).catch(function () {
+      clearTimeout(timer);
+      return null;
+    });
+  }
+
+  /* 扫描一段网段的 1-254，并发跑。
+     不用 UDP 组播：浏览器和 WebView 收不到组播包，只能这样探。 */
+  async function scanLan(opts) {
+    opts = opts || {};
+    var prefixes = opts.prefixes || [];
+    var port = opts.port || 8787;
+    var concurrency = opts.concurrency || 48;
+    var timeoutMs = opts.timeoutMs || 700;
+    var onProgress = opts.onProgress || function () {};
+
+    var targets = [];
+    for (var i = 0; i < prefixes.length; i++) {
+      var pre = String(prefixes[i]).replace(/\.$/, '');
+      for (var n = 1; n <= 254; n++) targets.push(pre + '.' + n);
+    }
+    /* 先探自己所在的那一段，命中更快 */
+    var found = [];
+    var idx = 0;
+    var done = 0;
+
+    async function worker() {
+      while (idx < targets.length) {
+        var ip = targets[idx++];
+        var hit = await probe(ip, port, timeoutMs);
+        done++;
+        if (hit) {
+          if (!found.some(function (f) { return f.ip === hit.ip; })) found.push(hit);
+          onProgress(done, targets.length, found);
+        } else if (done % 24 === 0) {
+          onProgress(done, targets.length, found);
+        }
+      }
+    }
+
+    var workers = [];
+    for (var w = 0; w < Math.min(concurrency, targets.length); w++) workers.push(worker());
+    await Promise.all(workers);
+    onProgress(done, targets.length, found);
+    return found;
+  }
+
+  /* 从当前页面推断网段。App 里（localhost）返回空，让调用方问用户。 */
+  function lanPrefixes() {
+    var out = [];
+    var h = location.hostname;
+    if (/^\d+\.\d+\.\d+\.\d+$/.test(h) && !h.startsWith('127.')) {
+      out.push(h.split('.').slice(0, 3).join('.'));
+    }
+    return out;
+  }
+
   global.Sync = {
     isConnected: isConnected,
     connection: connection,
@@ -311,6 +416,11 @@
     listFiles: listFiles,
     downloadFile: downloadFile,
     deleteFile: deleteFile,
-    localPairCode: localPairCode
+    localPairCode: localPairCode,
+    probe: probe,
+    scanLan: scanLan,
+    lanPrefixes: lanPrefixes,
+    devices: devices,
+    kickDevice: kickDevice
   };
 })(window);

@@ -1928,3 +1928,13 @@ input[type="color"]::-webkit-color-swatch {
   letter-spacing: .14em;
   color: var(--accent);
 }
+
+/* 连接页：角色标记 */
+.link-role { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+
+/* 两步确认中的按钮 */
+[data-confirm="true"] {
+  color: var(--danger) !important;
+  border-color: var(--danger) !important;
+}
+.mini-btn[data-confirm="true"] { opacity: 1 !important; }

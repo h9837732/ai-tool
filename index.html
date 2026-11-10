@@ -291,66 +291,80 @@
 
     <!-- 连接 -->
     <div class="pane" data-pane="link" hidden>
+      <div class="link-role">
+        <span class="card-badge" id="linkBadge">—</span>
+      </div>
 
-      <section class="card" id="hostCard" hidden>
-        <div class="card-head">
-          <h2 data-i18n="host.title">这台电脑</h2>
-          <span class="card-badge" id="hostBadge">—</span>
-        </div>
-        <p class="host-code" id="hostCode"></p>
-        <p class="card-sub" id="hostUrl"></p>
-        <p class="card-note" data-i18n="host.note">手机 App → 设置 → 连接，填这个配对码就能和这台电脑同步。</p>
-      </section>
+      <!-- ===== 电脑端（本机就是服务端） ===== -->
+      <div id="linkHost" hidden>
+        <section class="card">
+          <div class="card-head">
+            <h2 data-i18n="host.pairCode">配对码</h2>
+            <button class="text-btn" id="btnCopyHostUrl" type="button" data-i18n="host.copyUrl">复制地址</button>
+          </div>
+          <p class="host-code" id="hostCode">------</p>
+          <p class="card-sub" id="hostUrl"></p>
+          <p class="card-note" id="hostMeta"></p>
+          <p class="card-note" data-i18n="host.note">手机打开「钥匙」App → 设置 → 连接 → 扫描，或直接填这个地址和配对码。</p>
+        </section>
 
-      <section class="card">
-        <div class="card-head">
-          <h2 data-i18n="link.title">手机与电脑</h2>
-          <span class="card-badge" id="linkBadge">—</span>
-        </div>
-        <p class="card-text" id="linkState"></p>
-        <p class="card-sub" id="linkWhere"></p>
-        <div class="link-row" id="linkActions"></div>
-      </section>
+        <section class="card">
+          <div class="card-head">
+            <h2 data-i18n="host.devices">已配对的手机</h2>
+            <button class="text-btn" id="btnRefreshDevices" type="button" data-i18n="common.refresh">刷新</button>
+          </div>
+          <div class="file-list" id="hostDevices"></div>
+          <p class="card-note" data-i18n="host.devicesNote">断开后，那台手机要重新配对才能同步。</p>
+        </section>
 
-      <section class="card" id="nearbyCard" hidden>
-        <div class="card-head">
-          <h2 data-i18n="link.nearby">附近的电脑</h2>
-          <button class="text-btn" id="btnScanNearby" type="button" data-i18n="link.rescan">重新搜索</button>
-        </div>
-        <p class="card-sub" id="nearbyHint"></p>
-        <div class="nearby-list" id="nearbyList"></div>
-      </section>
+      </div>
 
-      <section class="pform" id="pairForm" hidden>
-        <p class="pform-title" data-i18n="link.pairTitle">配对这台电脑</p>
-        <div class="field">
-          <label for="pairUrl" data-i18n="link.url">电脑地址</label>
-          <input type="text" id="pairUrl" spellcheck="false" inputmode="url" placeholder="http://192.168.1.49:8787">
-          <p class="field-note" data-i18n="link.urlNote">在电脑上运行 server/lan.mjs，终端里会打印这个地址。</p>
-        </div>
-        <div class="field">
-          <label for="pairCode" data-i18n="link.code">配对码</label>
-          <input type="text" id="pairCode" spellcheck="false" inputmode="numeric" maxlength="6" placeholder="123456">
-          <p class="field-note" data-i18n="link.codeNote">终端里那 6 位数字，每次启动服务都会换。</p>
-        </div>
-        <div class="pform-actions">
-          <button class="btn-primary" id="btnPair" type="button" data-i18n="link.doPair">连接</button>
-          <button class="text-btn" id="btnPairCancel" type="button" data-i18n="common.cancel">取消</button>
-        </div>
-      </section>
+      <!-- ===== 手机端（连别人的电脑） ===== -->
+      <div id="linkClient" hidden>
+        <section class="card">
+          <div class="card-head">
+            <h2 data-i18n="link.pcSide">电脑</h2>
+            <span class="card-badge" id="clientBadge">—</span>
+          </div>
+          <p class="card-text" id="clientState"></p>
+          <p class="card-sub" id="clientWhere"></p>
+          <div class="link-row" id="clientActions"></div>
+        </section>
 
-      <section class="card">
+        <section class="card" id="scanWrap">
+          <div class="card-head">
+            <h2 data-i18n="link.scanTitle">扫描局域网</h2>
+          </div>
+          <p class="card-sub" id="scanStatus"></p>
+          <div class="file-list" id="scanList"></div>
+        </section>
+
+        <section class="pform" id="pairForm" hidden>
+          <p class="pform-title" data-i18n="link.pairTitle">手动配对</p>
+          <div class="field">
+            <label for="pairUrl" data-i18n="link.url">电脑地址</label>
+            <input type="text" id="pairUrl" spellcheck="false" inputmode="url" placeholder="http://192.168.1.49:8787">
+          </div>
+          <div class="field">
+            <label for="pairCode" data-i18n="link.code">配对码</label>
+            <input type="text" id="pairCode" spellcheck="false" inputmode="numeric" maxlength="6" placeholder="123456">
+          </div>
+          <div class="pform-actions">
+            <button class="btn-primary" id="btnPair" type="button" data-i18n="link.doPair">连接</button>
+            <button class="text-btn" id="btnPairCancel" type="button" data-i18n="common.cancel">取消</button>
+          </div>
+        </section>
+
+      </div>
+
+      <!-- 文件：两端共用一份 -->
+      <section class="card" id="fileCard">
         <div class="card-head">
           <h2 data-i18n="link.files">文件</h2>
           <button class="text-btn" id="btnPickUpload" type="button" data-i18n="link.sendFile">发送文件</button>
         </div>
         <div class="file-list" id="fileList"></div>
-        <p class="card-note" data-i18n="link.filesNote">文件直接存到电脑的 server/data/files/ 目录，中间不经过任何服务器。</p>
-      </section>
-
-      <section class="card">
-        <div class="card-head"><h2 data-i18n="link.howto">怎么用</h2></div>
-        <ol class="steps" data-i18n-steps="link.steps"></ol>
+        <p class="card-note" data-i18n="link.filesNote">文件直接存到电脑的 keyapp-data/files/ 目录。</p>
       </section>
     </div>
 

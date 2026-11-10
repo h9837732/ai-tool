@@ -46,10 +46,19 @@ ASSETS_B64 = ""
 # ---------------------------------------------------------------- 路径
 
 def base_dir():
-    """数据放在 exe 旁边，而不是 PyInstaller 的临时解压目录。"""
+    """数据放在 exe 旁边，而不是 PyInstaller 的临时解压目录。
+
+    开发模式（直接跑 .py）时，本文件在 desktop/ 下，
+    而前端产物 www/ 在项目根，所以往回找一层。既找不到就原地。
+    """
     if getattr(sys, "frozen", False):
         return os.path.dirname(os.path.abspath(sys.executable))
-    return os.path.dirname(os.path.abspath(__file__))
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    parent = os.path.dirname(here)
+    if os.path.isdir(os.path.join(parent, "www")) or os.path.isfile(os.path.join(parent, "index.html")):
+        return parent
+    return here
 
 
 DATA_DIR = os.path.join(base_dir(), "keyapp-data")
@@ -213,7 +222,7 @@ class Hub(object):
             self.logs.append(line)
             if len(self.logs) > 300:
                 del self.logs[:150]
-        print(line)
+        print(line, flush=True)
 
     def load_tokens(self):
         with self.lock:
@@ -286,6 +295,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("content-type", ctype)
         self.send_header("content-length", str(len(data)))
+        # 本地服务不用缓存：改了代码重启就能看到，不会被浏览器留着旧版
+        self.send_header("cache-control", "no-store, no-cache, must-revalidate")
         self._cors()
         for k, v in (extra or {}).items():
             self.send_header(k, v)
@@ -330,6 +341,107 @@ class Handler(BaseHTTPRequestHandler):
     def _route(self, method):
         path = self.path.split("?")[0]
 
+        # 手机扫描局域网时先打这个：免认证，只回一个身份标记，不含任何隐私
+        # 电脑端自己看的东西（配对码、设备、文件）都走这个。
+        # 本机专用：局域网其他设备拿到 403，所以不需要令牌。
+        if path == "/api/host/info":
+            if not self._is_local():
+                return self._json(403, {"error": "local-only"})
+            primary, others = local_ips()
+            devices = []
+            for tk, meta in list(HUB.tokens.items()):
+                devices.append({
+                    "tail": tk[-6:],
+                    "device": meta.get("device") or "device",
+                    "at": meta.get("at") or 0,
+                })
+            devices.sort(key=lambda x: -x["at"])
+            files = []
+            try:
+                for n in os.listdir(FILE_DIR):
+                    fp = os.path.join(FILE_DIR, n)
+                    if os.path.isfile(fp):
+                        st = os.stat(fp)
+                        files.append({"name": n, "size": st.st_size, "at": int(st.st_mtime * 1000)})
+            except Exception:
+                pass
+            files.sort(key=lambda x: -x["at"])
+            return self._json(200, {
+                "code": HUB.pair_code,
+                "alias": HUB.alias,
+                "port": HUB.port,
+                "ip": primary,
+                "url": "http://%s:%d" % (primary, HUB.port),
+                "otherIps": others,
+                "devices": devices[:50],
+                "files": files[:200],
+            })
+
+        if path == "/api/host/kick" and method == "POST":
+            if not self._is_local():
+                return self._json(403, {"error": "local-only"})
+            tail = str((self._body_json() or {}).get("tail") or "")
+            removed = 0
+            with HUB.lock:
+                for tk in list(HUB.tokens.keys()):
+                    if tail and tk.endswith(tail):
+                        HUB.tokens.pop(tk, None)
+                        removed += 1
+            if removed:
+                HUB.save_tokens()
+                HUB.log("已断开 %d 台设备" % removed)
+            return self._json(200, {"removed": removed})
+
+        if path == "/api/host/file" and method == "POST":
+            if not self._is_local():
+                return self._json(403, {"error": "local-only"})
+            from urllib.parse import unquote
+            raw_name = unquote(self.headers.get("x-filename") or "file")
+            safe = os.path.basename(raw_name)
+            for ch in '\\/:*?"<>|':
+                safe = safe.replace(ch, "_")
+            safe = safe[:120] or "file"
+            data = self._body()
+            if not data:
+                return self._json(400, {"error": "empty"})
+            name, i = safe, 1
+            while os.path.exists(os.path.join(FILE_DIR, name)):
+                stem, ext = os.path.splitext(safe)
+                name = "%s-%d%s" % (stem, i, ext)
+                i += 1
+            with open(os.path.join(FILE_DIR, name), "wb") as f:
+                f.write(data)
+            HUB.log("收到文件：%s（%d 字节）" % (name, len(data)))
+            return self._json(200, {"name": name, "size": len(data)})
+
+        if path.startswith("/api/host/file/"):
+            if not self._is_local():
+                return self._json(403, {"error": "local-only"})
+            from urllib.parse import unquote, quote
+            name = os.path.basename(unquote(path[len("/api/host/file/"):]))
+            fp = os.path.join(FILE_DIR, name)
+            if method == "DELETE":
+                try:
+                    os.remove(fp)
+                    HUB.log("删除文件：%s" % name)
+                except Exception:
+                    pass
+                return self._json(200, {"ok": True})
+            if not os.path.isfile(fp):
+                return self._json(404, {"error": "not-found"})
+            with open(fp, "rb") as f:
+                data = f.read()
+            return self._raw(200, data, "application/octet-stream",
+                             {"content-disposition": 'attachment; filename="%s"' % quote(name)})
+
+        if path == "/api/ping":
+            primary, _ = local_ips()
+            return self._json(200, {
+                "app": APP_TAG, "alias": HUB.alias,
+                "url": "http://%s:%d" % (primary, HUB.port),
+                "port": HUB.port, "version": 1
+            })
+
         if path == "/api/code":
             if not self._is_local():
                 return self._json(403, {"error": "local-only"})
@@ -365,6 +477,31 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/info":
                 return self._json(200, {"name": APP_NAME + " · 电脑端", "version": 1,
                                         "alias": HUB.alias, "devices": len(HUB.tokens), "port": HUB.port})
+
+            if path == "/api/devices" and method == "GET":
+                out = []
+                for tk, meta in list(HUB.tokens.items()):
+                    out.append({
+                        "tail": tk[-6:],
+                        "device": meta.get("device") or "device",
+                        "at": meta.get("at") or 0,
+                    })
+                out.sort(key=lambda x: -x["at"])
+                return self._json(200, {"devices": out})
+
+            if path == "/api/devices" and method == "DELETE":
+                body = self._body_json()
+                tail = str(body.get("tail") or "")
+                removed = 0
+                with HUB.lock:
+                    for tk in list(HUB.tokens.keys()):
+                        if tail and tk.endswith(tail):
+                            HUB.tokens.pop(tk, None)
+                            removed += 1
+                if removed:
+                    HUB.save_tokens()
+                    HUB.log("已断开 %d 台设备" % removed)
+                return self._json(200, {"removed": removed})
 
             if path == "/api/peers":
                 return self._json(200, {"self": {"alias": HUB.alias, "port": HUB.port},
@@ -597,6 +734,9 @@ BROWSER_CANDIDATES = [
     r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe",
 ]
 
+# 窗口标题里出现这个就认为是我们的界面
+WINDOW_TITLE_HINT = "钥匙"
+
 
 def find_browser():
     for raw in BROWSER_CANDIDATES:
@@ -612,8 +752,55 @@ def find_browser():
     return None
 
 
+def app_window_exists():
+    """有没有一个可见窗口，标题包含 WINDOW_TITLE_HINT。
+    只用 ctypes 调 user32，不引第三方库。"""
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except Exception:
+        return False
+
+    try:
+        user32 = ctypes.windll.user32
+    except Exception:
+        return False
+
+    found = [False]
+    ENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+    def cb(hwnd, _lparam):
+        try:
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            n = user32.GetWindowTextLengthW(hwnd)
+            if n <= 0:
+                return True
+            buf = ctypes.create_unicode_buffer(n + 1)
+            user32.GetWindowTextW(hwnd, buf, n + 1)
+            text = buf.value or ""
+            if WINDOW_TITLE_HINT in text:
+                rect = wintypes.RECT()
+                user32.GetWindowRect(hwnd, ctypes.byref(rect))
+                # 排除掉樱桃自己的对话窗、以及那些很小的提示窗
+                if (rect.right - rect.left) >= 480:
+                    found[0] = True
+                    return False
+        except Exception:
+            pass
+        return True
+
+    try:
+        user32.EnumWindows(ENUMPROC(cb), 0)
+    except Exception:
+        return False
+    return found[0]
+
+
 def launch_app_window(url, width=1040, height=800):
-    """返回浏览器进程；找不到浏览器返回 None。"""
+    """返回浏览器进程（可能很快就自己退出了，别用它判断寿命）。"""
     exe = find_browser()
     if not exe:
         return None
@@ -638,10 +825,36 @@ def launch_app_window(url, width=1040, height=800):
         return None
 
 
+def watch_window(url):
+    """等窗口出现，然后等它消失。返回 True 表示正常经历了一个开→关周期。"""
+    appeared = False
+    for _ in range(25):                 # 最多等 25 秒让它起来
+        if app_window_exists():
+            appeared = True
+            break
+        time.sleep(1)
+
+    if not appeared:
+        HUB.log("没看到界面窗口，可能浏览器把它并到了已有窗口里")
+        return False
+
+    HUB.log("窗口已就绪，关掉它就会退出")
+    idle = 0
+    while True:
+        time.sleep(2)
+        if app_window_exists():
+            idle = 0
+            continue
+        # 关窗后给 3 秒缓冲：Edge 有时会在换 tab 时短暂消失
+        idle += 1
+        if idle >= 2:
+            HUB.log("窗口已关闭，正在退出")
+            return True
+
+
 def fallback_window(url):
     """没有 Edge/Chrome 时的兜底：默认浏览器 + 一个能看配对码的小窗。"""
     import tkinter as tk
-    from tkinter import messagebox
 
     primary, _ = local_ips()
     root = tk.Tk()
@@ -658,13 +871,12 @@ def fallback_window(url):
     tk.Label(root, text="手机访问  http://%s:%d" % (primary, HUB.port),
              bg="#F2F8FF", fg="#17211C", font=("Consolas", 9)).pack(pady=(6, 2))
     tk.Label(root, text="没找到 Edge 或 Chrome，界面已在默认浏览器打开。\n关掉这个窗口服务就停。",
-             bg="#F2F8FF", fg="#5C6D63", font=("Microsoft YaHei UI", 8), justify="center").pack(pady=8)
+             bg="#F2F8FF", fg="#5C6D63", font=("Microsoft YaHei UI", 8),
+             justify="center").pack(pady=8)
 
-    def open_again():
-        webbrowser.open(url)
-
-    tk.Button(root, text="再打开一次界面", command=open_again, bg="#2E7BD6", fg="white",
-              relief="flat", font=("Microsoft YaHei UI", 9), padx=12, pady=4).pack(pady=6)
+    tk.Button(root, text="再打开一次界面", command=lambda: webbrowser.open(url),
+              bg="#2E7BD6", fg="white", relief="flat",
+              font=("Microsoft YaHei UI", 9), padx=12, pady=4).pack(pady=6)
     webbrowser.open(url)
     root.mainloop()
 
@@ -675,16 +887,13 @@ def main():
     ensure_dirs()
     HUB.load_tokens()
 
-    # 已经在跑就直接把窗口带出来，不起第二个
+    # 已经有服务在跑：把窗口带出来就行，不起第二个
     if already_running(DEFAULT_PORT):
-        win = launch_app_window("http://127.0.0.1:%d/" % DEFAULT_PORT)
-        if win is None:
-            webbrowser.open("http://127.0.0.1:%d/" % DEFAULT_PORT)
-        if win is not None:
-            try:
-                win.wait()
-            except Exception:
-                pass
+        url = "http://127.0.0.1:%d/" % DEFAULT_PORT
+        if launch_app_window(url) is None:
+            webbrowser.open(url)
+        else:
+            watch_window(url)
         return
 
     assets = load_assets()
@@ -695,9 +904,10 @@ def main():
             from tkinter import messagebox
             root = tk.Tk()
             root.withdraw()
-            messagebox.showerror("缺少界面资源",
-                                 "这个程序里没有内嵌前端文件，旁边也没有 www 目录。\n\n"
-                                 "请先运行 embed_assets.py 生成带资源的版本再打包。")
+            messagebox.showerror(
+                "缺少界面资源",
+                "这个程序里没有内嵌前端文件，旁边也没有 www 目录。\n\n"
+                "请先运行 embed_assets.py 生成带资源的版本再打包。")
         except Exception:
             pass
         return
@@ -721,13 +931,12 @@ def main():
             srv.server_close()
         return
 
-    HUB.log("窗口已打开，关掉它就会退出")
     try:
-        win.wait()
+        if watch_window(url):
+            pass
     except KeyboardInterrupt:
         pass
     finally:
-        HUB.log("窗口已关闭，正在退出")
         disc.stop()
         srv.shutdown()
         srv.server_close()
