@@ -44,6 +44,16 @@
     return h;
   }
 
+  /* 令牌失效（对端数据被清过、或换了电脑）时自动断开，
+     否则界面只会显示 HTTP 401，用户不知道该干什么 */
+  function authFail(res) {
+    if (res.status === 401) {
+      saveConn(null);
+      return true;
+    }
+    return false;
+  }
+
   async function readError(res) {
     var txt = await res.text().catch(function () { return ''; });
     try {
@@ -184,6 +194,7 @@
         headers: headers({ 'content-type': 'application/json' }),
         body: JSON.stringify(payload)
       });
+      if (authFail(res)) return { ok: false, error: 'reauth' };
       if (!res.ok) return { ok: false, error: await readError(res) };
 
       var merged = await res.json();
@@ -223,6 +234,7 @@
     if (!isConnected()) return { ok: false, error: 'notconnected' };
     try {
       var res = await fetch(conn.url + '/api/files', { headers: headers() });
+      if (authFail(res)) return { ok: false, error: 'reauth' };
       if (!res.ok) return { ok: false, error: await readError(res) };
       var j = await res.json();
       return { ok: true, files: (j && j.files) || [] };
@@ -277,6 +289,7 @@
     if (!isConnected()) return { ok: false, error: 'notconnected' };
     try {
       var res = await fetch(conn.url + '/api/peers', { headers: headers() });
+      if (authFail(res)) return { ok: false, error: 'reauth' };
       if (!res.ok) return { ok: false, error: 'HTTP ' + res.status };
       var j = await res.json();
       return { ok: true, self: j.self, peers: (j && j.peers) || [] };

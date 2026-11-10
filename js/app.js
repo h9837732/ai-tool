@@ -7,6 +7,22 @@
 
   var CHANGELOG = [
     {
+      v: '1.3.3',
+      date: '2026-11',
+      zh: [
+        '电脑端改成单窗口：双击直接进聊天，没有控制窗和浏览器地址栏',
+        '配对码移进应用内部（设置 → 连接 → 这台电脑）',
+        '关掉窗口，服务和进程一起退出',
+        '配对失效时给出「重新配对」的提示，不再只显示 HTTP 401'
+      ],
+      en: [
+        'Desktop is now a single window: double-click and you are in the chat',
+        'Pairing code moved into the app (Settings → Link → This computer)',
+        'Closing the window stops the service and exits',
+        'Expired pairing now says "pair again" instead of just HTTP 401'
+      ]
+    },
+    {
       v: '1.3.2',
       date: '2026-11',
       zh: [
@@ -2239,6 +2255,25 @@
 
   var linkFiles = [];
 
+  /* 这台设备如果是「电脑端」，把配对码直接显示在界面里 ——
+     电脑端没有独立控制窗，配对信息只能在这里给。 */
+  async function renderHostCard() {
+    if (!el.hostCard) return;
+    var info = null;
+    try {
+      var res = await fetch('/api/code');
+      if (res.ok) info = await res.json();
+    } catch (e) {
+      info = null;
+    }
+    if (!info || !info.code) { el.hostCard.hidden = true; return; }
+
+    el.hostCard.hidden = false;
+    el.hostCode.textContent = info.code;
+    el.hostUrl.textContent = (info.url || '') + '　·　' + t('host.paired', { n: info.devices || 0 });
+    el.hostBadge.textContent = t('host.badge');
+  }
+
   function renderLinkPane() {
     if (!el.linkBadge) return;
     var on = Sync.isConnected();
@@ -2281,7 +2316,8 @@
     el.nearbyHint.textContent = t('link.scanning');
     var r = await Sync.peers();
     if (!r.ok) {
-      el.nearbyHint.textContent = t('link.scanFail', { msg: r.error || 'error' });
+      el.nearbyHint.textContent = linkErrorText(r.error) || t('link.scanFail', { msg: r.error || 'error' });
+      el.nearbyList.innerHTML = '';
       return;
     }
     nearbyPeers = r.peers || [];
@@ -2331,12 +2367,22 @@
     runSync();
   }
 
+  /* 把 reauth 翻译成人话，并顺手把界面切回「未连接」 */
+  function linkErrorText(err) {
+    if (err === 'reauth') {
+      renderLinkPane();
+      renderHostCard();
+      return t('link.reauth');
+    }
+    return null;
+  }
+
   async function runSync() {
     if (!Sync.isConnected()) { toast(t('link.needConnect')); return; }
     toast(t('link.syncing'), 1500);
     var r = await Sync.syncNow();
     if (!r.ok) {
-      toast(t('link.syncFail', { msg: r.error || 'error' }), 5000);
+      toast(linkErrorText(r.error) || t('link.syncFail', { msg: r.error || 'error' }), 6000);
       return;
     }
     /* 同步回来的对话要在界面上体现 */
@@ -2722,7 +2768,7 @@
     state.settingsTab = name || 'keys';
     renderTabs();
     if (state.settingsTab === 'usage') renderUsagePane();
-    if (state.settingsTab === 'link') { renderLinkPane(); refreshFiles(); refreshNearby(); }
+    if (state.settingsTab === 'link') { renderLinkPane(); renderHostCard(); refreshFiles(); refreshNearby(); }
     el.settings.querySelector('.sheet-body').scrollTop = 0;
   }
 
@@ -3489,6 +3535,10 @@
     el.btnSfCancel = $('btnSfCancel');
     el.btnCloseSkills = $('btnCloseSkills');
 
+    el.hostCard = $('hostCard');
+    el.hostCode = $('hostCode');
+    el.hostUrl = $('hostUrl');
+    el.hostBadge = $('hostBadge');
     el.nearbyCard = $('nearbyCard');
     el.nearbyHint = $('nearbyHint');
     el.nearbyList = $('nearbyList');

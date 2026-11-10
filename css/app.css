@@ -1918,3 +1918,13 @@ input[type="color"]::-webkit-color-swatch {
 
 .nearby-list { display: flex; flex-direction: column; }
 .nearby-list:empty { display: none; }
+
+/* 电脑端：本机配对码 */
+.host-code {
+  margin: 2px 0 6px;
+  font-family: var(--mono);
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: .14em;
+  color: var(--accent);
+}

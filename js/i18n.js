@@ -223,6 +223,7 @@
 
       'settings.tabLink': '连接',
 
+      'link.reauth': '这台电脑已经不认这条配对了（它的数据被清过或换了机器），重新配对一次就行。',
       'link.nearby': '附近的电脑',
       'link.rescan': '重新搜索',
       'link.scanning': '正在搜索同一 WiFi 下的其他设备…',
@@ -231,6 +232,11 @@
       'link.scanFail': '搜索失败：{msg}',
       'link.useThis': '用这台',
       'link.fillFromPeer': '已填入「{name}」的地址，再输入它的配对码',
+
+      'host.title': '这台电脑',
+      'host.badge': '电脑端',
+      'host.paired': '已配对 {n} 台设备',
+      'host.note': '手机 App → 设置 → 连接，填这个配对码就能和这台电脑同步。',
 
       'link.title': '手机与电脑',
       'link.connected': '已连接',
@@ -604,6 +610,7 @@
 
       'settings.tabLink': 'Link',
 
+      'link.reauth': 'This computer no longer recognises the pairing (its data was reset or replaced). Pair again.',
       'link.nearby': 'Nearby computers',
       'link.rescan': 'Scan again',
       'link.scanning': 'Looking for other devices on this WiFi…',
@@ -612,6 +619,11 @@
       'link.scanFail': 'Scan failed: {msg}',
       'link.useThis': 'Use this',
       'link.fillFromPeer': 'Filled in the address of "{name}" — now enter its code',
+
+      'host.title': 'This computer',
+      'host.badge': 'Desktop',
+      'host.paired': '{n} device(s) paired',
+      'host.note': 'On the phone: Settings → Link, enter this code to sync with this computer.',
 
       'link.title': 'Phone and desktop',
       'link.connected': 'Connected',

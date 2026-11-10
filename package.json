@@ -1,6 +1,6 @@
 {
   "name": "keyapp",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "private": true,
   "description": "自带 API Key 的 AI 对话客户端",
   "scripts": {

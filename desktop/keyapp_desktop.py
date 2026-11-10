@@ -1,26 +1,34 @@
 # -*- coding: utf-8 -*-
 """钥匙 · 电脑端
 
-一个窗口 + 一个本地 Web 服务：
-  · 窗口负责配对码、访问地址、已发现设备、日志
-  · Web 服务托管界面、提供同步与文件接口
-  · 组播广播让手机 App 自动发现这台电脑
+双击就进聊天。内部做三件事：
+  1. 起一个本地 Web 服务（托管内嵌的聊天界面）
+  2. 用 Edge / Chrome 的「应用模式」把界面装进一个独立窗口
+     —— 没有地址栏、没有标签页，看着就是一个桌面软件
+  3. 组播广播，让手机 App 自动发现这台电脑
 
-前端界面已经内嵌在这个文件里（见文件末尾的 ASSETS_B64），
-所以用 PyInstaller --onefile 打成单个 exe 后不需要任何外部文件。
+关掉那个窗口，服务和进程一起退出。
 
-只用 Python 标准库：tkinter + http.server + sqlite 都不需要，没有第三方依赖。
+为什么不用 WebView 内嵌：本机 Python 环境的 PyQt5 装在不含纯 ASCII 的
+用户目录下，PyInstaller 的 Qt 钩子读不了这个路径，打包会失败。
+应用模式这条路零依赖、必然可用，界面效果一样干净。
+
+前端代码内嵌在文件末尾的 ASSETS_B64 里（由 embed_assets.py 生成），
+所以 --onefile 打出来的 exe 不需要任何外部文件。
 """
 
 import base64
 import io
 import json
 import os
+import shutil
 import socket
 import struct
+import subprocess
 import sys
 import threading
 import time
+import urllib.request
 import webbrowser
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -48,6 +56,7 @@ DATA_DIR = os.path.join(base_dir(), "keyapp-data")
 FILE_DIR = os.path.join(DATA_DIR, "files")
 STATE_FILE = os.path.join(DATA_DIR, "state.json")
 TOKENS_FILE = os.path.join(DATA_DIR, "tokens.json")
+PROFILE_DIR = os.path.join(DATA_DIR, "window-profile")
 
 
 def ensure_dirs():
@@ -71,7 +80,7 @@ def save_json(path, value):
 
 def local_ips():
     """返回 (主网卡 IP, 其他 IP)。主网卡用 UDP 出站地址判断，
-    虚拟机/虚拟网卡会排在后面，不干扰用户选择。"""
+    虚拟机/虚拟网卡排后面，免得用户不知道该填哪个。"""
     primary = None
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -115,18 +124,13 @@ def new_token():
 # ---------------------------------------------------------------- 内嵌资源
 
 def load_assets():
-    """把内嵌的 zip 解成 {路径: (bytes, content_type)}，进程内只解一次。"""
+    """把内嵌的 zip 解成 {路径: bytes}，进程内只解一次。"""
     if not ASSETS_B64.strip():
         return None
     try:
         raw = base64.b64decode(ASSETS_B64.encode("ascii"))
         zf = zipfile.ZipFile(io.BytesIO(raw))
-        out = {}
-        for name in zf.namelist():
-            if name.endswith("/"):
-                continue
-            out[name] = zf.read(name)
-        return out
+        return {n: zf.read(n) for n in zf.namelist() if not n.endswith("/")}
     except Exception:
         return None
 
@@ -152,7 +156,7 @@ def content_type(path):
 # ---------------------------------------------------------------- 同步合并
 
 def merge_state(local, remote):
-    """同一 id 取 updatedAt 更新的；墓碑比对话新就删掉。与 JS 侧逻辑一致。"""
+    """同一个 id 取 updatedAt 更新的；墓碑比对话新就删掉。"""
     out = {"conversations": {}, "tombstones": {}, "skills": None, "skillsAt": 0, "updatedAt": 0}
 
     lc = (local or {}).get("conversations") or {}
@@ -170,13 +174,11 @@ def merge_state(local, remote):
     for cid in set(list(lt.keys()) + list(rt.keys())):
         out["tombstones"][cid] = max(lt.get(cid) or 0, rt.get(cid) or 0)
 
-    # 墓碑生效
     for cid, ts in list(out["tombstones"].items()):
         conv = out["conversations"].get(cid)
         if conv and (conv.get("updatedAt") or 0) <= ts:
             out["conversations"].pop(cid, None)
 
-    # 7 天前的墓碑可以忘掉
     cutoff = int(time.time() * 1000) - 7 * 24 * 3600 * 1000
     out["tombstones"] = {k: v for k, v in out["tombstones"].items() if v >= cutoff}
 
@@ -196,8 +198,6 @@ def merge_state(local, remote):
 # ---------------------------------------------------------------- 服务状态
 
 class Hub(object):
-    """服务端共享状态。GUI 和 HTTP 线程都读写它，用锁保护。"""
-
     def __init__(self):
         self.lock = threading.Lock()
         self.port = DEFAULT_PORT
@@ -206,26 +206,15 @@ class Hub(object):
         self.tokens = {}
         self.peers = {}
         self.logs = []
-        self.running = False
-        self.server = None
-        self.discovery = None
 
-    # 日志 ------------------------------------------------------
     def log(self, message):
         line = time.strftime("%H:%M:%S") + "  " + message
         with self.lock:
             self.logs.append(line)
-            if len(self.logs) > 500:
-                del self.logs[:200]
+            if len(self.logs) > 300:
+                del self.logs[:150]
         print(line)
 
-    def take_logs(self):
-        with self.lock:
-            out = list(self.logs)
-            self.logs = []
-        return out
-
-    # 令牌 ------------------------------------------------------
     def load_tokens(self):
         with self.lock:
             self.tokens = load_json(TOKENS_FILE, {}) or {}
@@ -245,7 +234,6 @@ class Hub(object):
         with self.lock:
             return bool(tk) and tk in self.tokens
 
-    # 邻居 ------------------------------------------------------
     def note_peer(self, fp, alias, address, port, model=""):
         if not fp or fp == fingerprint_for(self.port):
             return False
@@ -274,14 +262,12 @@ HUB = Hub()
 # ---------------------------------------------------------------- HTTP
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "KeyappDesktop/1.0"
+    server_version = "KeyappDesktop/2.0"
     protocol_version = "HTTP/1.1"
 
-    # 让日志走自己的 GUI 而不是 stderr
     def log_message(self, fmt, *args):
         pass
 
-    # ---- 工具 ----
     def _cors(self):
         self.send_header("access-control-allow-origin", "*")
         self.send_header("access-control-allow-headers", "authorization, content-type, x-filename")
@@ -320,14 +306,12 @@ class Handler(BaseHTTPRequestHandler):
             return {}
 
     def _is_local(self):
-        host = self.client_address[0]
-        return host in ("127.0.0.1", "::1", "::ffff:127.0.0.1")
+        return self.client_address[0] in ("127.0.0.1", "::1", "::ffff:127.0.0.1")
 
     def _token(self):
         h = self.headers.get("authorization") or ""
         return h[7:].strip() if h.startswith("Bearer ") else ""
 
-    # ---- 分发 ----
     def do_OPTIONS(self):
         self.send_response(204)
         self.send_header("content-length", "0")
@@ -346,15 +330,18 @@ class Handler(BaseHTTPRequestHandler):
     def _route(self, method):
         path = self.path.split("?")[0]
 
-        # 本机才能读配对码
         if path == "/api/code":
             if not self._is_local():
                 return self._json(403, {"error": "local-only"})
             primary, others = local_ips()
-            return self._json(200, {"code": HUB.pair_code, "port": HUB.port,
-                                     "alias": HUB.alias, "ip": primary, "otherIps": others})
+            return self._json(200, {
+                "code": HUB.pair_code, "port": HUB.port, "alias": HUB.alias,
+                "ip": primary, "otherIps": others,
+                "url": "http://%s:%d" % (primary, HUB.port),
+                "devices": len(HUB.tokens),
+                "version": "1.0",
+            })
 
-        # 发现应答（不需要令牌）
         if path == "/api/register" and method == "POST":
             body = self._body_json()
             if body.get("app") == APP_TAG and body.get("fingerprint"):
@@ -362,14 +349,13 @@ class Handler(BaseHTTPRequestHandler):
                               body.get("port"), body.get("deviceModel", ""))
             return self._json(200, {"ok": True, "alias": HUB.alias})
 
-        # 配对
         if path == "/api/pair" and method == "POST":
             body = self._body_json()
             if str(body.get("code") or "").strip() != HUB.pair_code:
                 HUB.log("配对失败：配对码不对（来自 %s）" % self.client_address[0])
                 return self._json(401, {"error": "bad-code"})
             tk = HUB.add_token(body.get("deviceName"))
-            HUB.log("已配对：%s（%s）" % ((body.get("deviceName") or "device")[:30], self.client_address[0]))
+            HUB.log("已配对：%s" % ((body.get("deviceName") or "device")[:30]))
             return self._json(200, {"token": tk})
 
         if path.startswith("/api/"):
@@ -414,12 +400,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, {"files": items[:200]})
 
             if path == "/api/files" and method == "POST":
-                raw_name = self.headers.get("x-filename") or "file"
-                try:
-                    from urllib.parse import unquote
-                    raw_name = unquote(raw_name)
-                except Exception:
-                    pass
+                from urllib.parse import unquote
+                raw_name = unquote(self.headers.get("x-filename") or "file")
                 safe = os.path.basename(raw_name)
                 for ch in '\\/:*?"<>|':
                     safe = safe.replace(ch, "_")
@@ -438,7 +420,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, {"name": name, "size": len(data)})
 
             if path.startswith("/api/files/"):
-                from urllib.parse import unquote
+                from urllib.parse import unquote, quote
                 name = os.path.basename(unquote(path[len("/api/files/"):]))
                 fp = os.path.join(FILE_DIR, name)
                 if method == "DELETE":
@@ -452,7 +434,6 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(404, {"error": "not-found"})
                 with open(fp, "rb") as f:
                     data = f.read()
-                from urllib.parse import quote
                 return self._raw(200, data, "application/octet-stream",
                                  {"content-disposition": 'attachment; filename="%s"' % quote(name)})
 
@@ -471,14 +452,12 @@ class Handler(BaseHTTPRequestHandler):
         if assets is not None:
             data = assets.get(rel)
             if data is None:
-                # 单页应用：未知路径回落到 index.html
                 data = assets.get("index.html")
                 if data is None:
                     return self._json(404, {"error": "not-found"})
                 rel = "index.html"
             return self._raw(200, data, content_type(rel))
 
-        # 开发模式：直接读磁盘上的 www/
         fp = os.path.join(getattr(self.server, "www_dir", ""), rel)
         if not os.path.isfile(fp):
             return self._json(404, {"error": "not-found"})
@@ -497,16 +476,12 @@ class Discovery(threading.Thread):
         self.stop_flag = threading.Event()
         self.sock = None
 
-    def _announce(self, announce=True):
-        body = json.dumps({
+    def _payload(self, announce):
+        return json.dumps({
             "alias": HUB.alias, "version": "2.0", "deviceModel": sys.platform,
             "deviceType": "desktop", "fingerprint": self.fp, "port": self.port,
             "protocol": "http", "app": APP_TAG, "download": True, "announce": announce,
         }, ensure_ascii=False).encode("utf-8")
-        try:
-            self.sock.sendto(body, (DISCOVERY_GROUP, DISCOVERY_PORT))
-        except Exception as e:
-            HUB.log("广播失败：%s" % e)
 
     def run(self):
         try:
@@ -523,12 +498,14 @@ class Discovery(threading.Thread):
             s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 1)
             s.settimeout(1.0)
             self.sock = s
-            HUB.log("组播发现已启动（%s:%d）" % (DISCOVERY_GROUP, DISCOVERY_PORT))
         except Exception as e:
-            HUB.log("组播启动失败（不影响手动填地址）：%s" % e)
+            HUB.log("组播启动失败（不影响手填地址）：%s" % e)
             return
 
-        self._announce(True)
+        try:
+            self.sock.sendto(self._payload(True), (DISCOVERY_GROUP, DISCOVERY_PORT))
+        except Exception:
+            pass
         last = time.time()
 
         while not self.stop_flag.is_set():
@@ -545,24 +522,20 @@ class Discovery(threading.Thread):
                 except Exception:
                     j = None
                 if j and j.get("app") == APP_TAG and j.get("fingerprint") != self.fp:
-                    is_new = HUB.note_peer(str(j.get("fingerprint")), j.get("alias"), addr[0],
-                                           j.get("port"), j.get("deviceModel", ""))
-                    if is_new:
+                    if HUB.note_peer(str(j.get("fingerprint")), j.get("alias"), addr[0],
+                                     j.get("port"), j.get("deviceModel", "")):
                         HUB.log("发现设备：%s @ %s" % (j.get("alias") or addr[0], addr[0]))
-                    # 对方在主动喊，回一发让它也认识我
                     if j.get("announce"):
-                        body = json.dumps({
-                            "alias": HUB.alias, "version": "2.0", "deviceModel": sys.platform,
-                            "deviceType": "desktop", "fingerprint": self.fp, "port": self.port,
-                            "protocol": "http", "app": APP_TAG, "download": True, "announce": False,
-                        }, ensure_ascii=False).encode("utf-8")
                         try:
-                            self.sock.sendto(body, (addr[0], DISCOVERY_PORT))
+                            self.sock.sendto(self._payload(False), (addr[0], DISCOVERY_PORT))
                         except Exception:
                             pass
 
             if time.time() - last > 30:
-                self._announce(True)
+                try:
+                    self.sock.sendto(self._payload(True), (DISCOVERY_GROUP, DISCOVERY_PORT))
+                except Exception:
+                    pass
                 last = time.time()
 
         try:
@@ -574,7 +547,7 @@ class Discovery(threading.Thread):
         self.stop_flag.set()
 
 
-# ---------------------------------------------------------------- 服务启停
+# ---------------------------------------------------------------- 启停
 
 def find_free_port(start=DEFAULT_PORT, tries=20):
     for p in range(start, start + tries):
@@ -590,8 +563,6 @@ def find_free_port(start=DEFAULT_PORT, tries=20):
 
 
 def already_running(port):
-    """同一台机器上是不是已经有一个钥匙服务在跑。"""
-    import urllib.request
     try:
         with urllib.request.urlopen("http://127.0.0.1:%d/api/code" % port, timeout=1.2) as r:
             return r.status == 200
@@ -600,11 +571,8 @@ def already_running(port):
 
 
 def start_server(port, assets, www_dir):
-    # 这里是所有启动路径的唯一入口：端口先落到 HUB 上，
-    # 否则换端口时 fingerprint 仍按 8787 算，自我回声过滤会失效
     HUB.port = port
-    handler = Handler
-    srv = ThreadingHTTPServer(("0.0.0.0", port), handler)
+    srv = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     srv.daemon_threads = True
     srv.assets = assets
     srv.www_dir = www_dir
@@ -614,311 +582,91 @@ def start_server(port, assets, www_dir):
     return srv
 
 
-# ---------------------------------------------------------------- 界面
+# ---------------------------------------------------------------- 应用窗口
+#
+# 用 Chromium 系浏览器的「应用模式」承载界面：
+#   msedge.exe --app=http://127.0.0.1:PORT
+# 效果是一个没有地址栏、没有标签页的独立窗口，标题取页面标题。
+# 比内嵌 WebView 省事得多，也不用担心 Qt / 非 ASCII 路径。
 
-import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox
-
-BG = "#F2F8FF"
-CARD = "#FFFFFF"
-LINE = "#D7DED6"
-TEXT = "#17211C"
-MUTED = "#5C6D63"
-ACCENT = "#2E7BD6"
-OK_GREEN = "#2E8B57"
-FONT = ("Microsoft YaHei UI", 9)
-FONT_BIG = ("Consolas", 30, "bold")
-FONT_MONO = ("Consolas", 9)
+BROWSER_CANDIDATES = [
+    r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe",
+    r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe",
+    r"%ProgramFiles%\Google\Chrome\Application\chrome.exe",
+    r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe",
+    r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe",
+]
 
 
-def startup_dir():
-    ad = os.environ.get("APPDATA")
-    if not ad:
+def find_browser():
+    for raw in BROWSER_CANDIDATES:
+        p = os.path.expandvars(raw)
+        if "%" in p:
+            continue
+        if os.path.isfile(p):
+            return p
+    for name in ("msedge.exe", "chrome.exe"):
+        p = shutil.which(name)
+        if p:
+            return p
+    return None
+
+
+def launch_app_window(url, width=1040, height=800):
+    """返回浏览器进程；找不到浏览器返回 None。"""
+    exe = find_browser()
+    if not exe:
         return None
-    return os.path.join(ad, "Microsoft", "Windows", "Start Menu", "Programs", "Startup")
+    try:
+        os.makedirs(PROFILE_DIR, exist_ok=True)
+    except Exception:
+        pass
+
+    args = [
+        exe,
+        "--app=" + url,
+        "--window-size=%d,%d" % (width, height),
+        "--user-data-dir=" + PROFILE_DIR,
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-features=Translate,msEdgeSidebarV2,msEdgeCollections",
+        "--disable-background-timer-throttling",
+    ]
+    try:
+        return subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        return None
 
 
-def autostart_file():
-    d = startup_dir()
-    return os.path.join(d, "钥匙自动启动.cmd") if d else None
+def fallback_window(url):
+    """没有 Edge/Chrome 时的兜底：默认浏览器 + 一个能看配对码的小窗。"""
+    import tkinter as tk
+    from tkinter import messagebox
 
+    primary, _ = local_ips()
+    root = tk.Tk()
+    root.title("钥匙 · 电脑端")
+    root.configure(bg="#F2F8FF")
+    root.geometry("420x260")
 
-class App(object):
-    def __init__(self, root, assets, www_dir, port, opened_by_hand):
-        self.root = root
-        self.assets = assets
-        self.www_dir = www_dir
-        self.port = port
-        self.srv = None
-        self.disc = None
-        self.opened_by_hand = opened_by_hand
+    tk.Label(root, text="钥匙 · 电脑端", bg="#2E7BD6", fg="white",
+             font=("Microsoft YaHei UI", 12, "bold")).pack(fill="x", ipady=10)
+    tk.Label(root, text="配对码", bg="#F2F8FF", fg="#5C6D63",
+             font=("Microsoft YaHei UI", 9)).pack(pady=(14, 0))
+    tk.Label(root, text=HUB.pair_code, bg="#F2F8FF", fg="#2E7BD6",
+             font=("Consolas", 26, "bold")).pack()
+    tk.Label(root, text="手机访问  http://%s:%d" % (primary, HUB.port),
+             bg="#F2F8FF", fg="#17211C", font=("Consolas", 9)).pack(pady=(6, 2))
+    tk.Label(root, text="没找到 Edge 或 Chrome，界面已在默认浏览器打开。\n关掉这个窗口服务就停。",
+             bg="#F2F8FF", fg="#5C6D63", font=("Microsoft YaHei UI", 8), justify="center").pack(pady=8)
 
-        root.title("钥匙 · 电脑端")
-        root.configure(bg=BG)
-        root.minsize(560, 720)
-        try:
-            root.iconphoto(True, tk.PhotoImage(width=1, height=1))
-        except Exception:
-            pass
+    def open_again():
+        webbrowser.open(url)
 
-        self._build()
-        self.start()
-        self._poll()
-
-    # ---- 布局 ----
-    def _card(self, parent, title=None, pad=12):
-        outer = tk.Frame(parent, bg=CARD, highlightbackground=LINE, highlightthickness=1)
-        outer.pack(fill="x", padx=12, pady=6)
-        inner = tk.Frame(outer, bg=CARD)
-        inner.pack(fill="both", expand=True, padx=pad, pady=pad)
-        if title:
-            tk.Label(inner, text=title, bg=CARD, fg=MUTED, font=FONT, anchor="w").pack(fill="x")
-        return inner
-
-    def _build(self):
-        # 顶部
-        head = tk.Frame(self.root, bg=ACCENT, height=52)
-        head.pack(fill="x")
-        head.pack_propagate(False)
-        tk.Label(head, text="钥匙 · 电脑端", bg=ACCENT, fg="white",
-                 font=("Microsoft YaHei UI", 13, "bold")).pack(side="left", padx=14)
-        self.lbl_state = tk.Label(head, text="", bg=ACCENT, fg="white", font=FONT)
-        self.lbl_state.pack(side="right", padx=14)
-
-        body = tk.Frame(self.root, bg=BG)
-        body.pack(fill="both", expand=True)
-
-        # 配对码
-        c1 = self._card(body, "配对码")
-        row = tk.Frame(c1, bg=CARD)
-        row.pack(fill="x", pady=(6, 2))
-        self.lbl_code = tk.Label(row, text=HUB.pair_code, bg=CARD, fg=ACCENT, font=FONT_BIG)
-        self.lbl_code.pack(side="left")
-        tk.Button(row, text="复制", command=self.copy_code, bg=CARD, fg=ACCENT,
-                  relief="solid", bd=1, font=FONT, padx=10).pack(side="left", padx=12)
-        tk.Button(row, text="换一个", command=self.rotate_code, bg=CARD, fg=MUTED,
-                  relief="solid", bd=1, font=FONT, padx=10).pack(side="left")
-        tk.Label(c1, text="手机 App →「设置 → 连接」→ 填这个码。每次启动都会换。",
-                 bg=CARD, fg=MUTED, font=FONT, anchor="w").pack(fill="x", pady=(4, 0))
-
-        # 地址
-        c2 = self._card(body, "访问地址")
-        self.addr_box = tk.Frame(c2, bg=CARD)
-        self.addr_box.pack(fill="x", pady=(4, 0))
-        self.render_addresses()
-
-        # 邻居
-        c3 = self._card(body, "附近的设备")
-        bar = tk.Frame(c3, bg=CARD)
-        bar.pack(fill="x", pady=(4, 4))
-        self.lbl_peers = tk.Label(bar, text="", bg=CARD, fg=MUTED, font=FONT)
-        self.lbl_peers.pack(side="left")
-        tk.Button(bar, text="刷新", command=self.refresh_peers, bg=CARD, fg=ACCENT,
-                  relief="solid", bd=1, font=FONT, padx=8).pack(side="right")
-        self.peer_list = tk.Listbox(c3, height=3, bg="#FAFCFE", fg=TEXT, font=FONT_MONO,
-                                    relief="flat", highlightthickness=1,
-                                    highlightbackground=LINE, activestyle="none")
-        self.peer_list.pack(fill="x")
-
-        # 日志
-        c4 = self._card(body, "日志")
-        self.log_box = scrolledtext.ScrolledText(c4, height=9, bg="#FAFCFE", fg=TEXT,
-                                                 font=FONT_MONO, relief="flat",
-                                                 highlightthickness=1, highlightbackground=LINE)
-        self.log_box.pack(fill="both", expand=True, pady=(4, 0))
-        self.log_box.configure(state="disabled")
-
-        # 底部
-        foot = tk.Frame(self.root, bg=BG)
-        foot.pack(fill="x", padx=12, pady=(0, 10))
-
-        r1 = tk.Frame(foot, bg=BG)
-        r1.pack(fill="x", pady=(0, 6))
-        tk.Label(r1, text="设备名称", bg=BG, fg=MUTED, font=FONT).pack(side="left")
-        self.alias_var = tk.StringVar(value=HUB.alias)
-        e = tk.Entry(r1, textvariable=self.alias_var, width=16, font=FONT, relief="solid", bd=1)
-        e.pack(side="left", padx=8)
-        tk.Button(r1, text="应用", command=self.apply_alias, bg=CARD, fg=MUTED,
-                  relief="solid", bd=1, font=FONT, padx=8).pack(side="left")
-        self.autostart_var = tk.BooleanVar(value=bool(autostart_file() and os.path.exists(autostart_file())))
-        tk.Checkbutton(r1, text="开机自动启动", variable=self.autostart_var,
-                       command=self.toggle_autostart, bg=BG, fg=MUTED, font=FONT,
-                       activebackground=BG, selectcolor=CARD).pack(side="right")
-
-        r2 = tk.Frame(foot, bg=BG)
-        r2.pack(fill="x")
-        self.btn_toggle = tk.Button(r2, text="停止服务", command=self.toggle_service,
-                                    bg=ACCENT, fg="white", relief="flat", font=FONT, padx=14, pady=5)
-        self.btn_toggle.pack(side="left")
-        tk.Button(r2, text="打开界面", command=self.open_browser, bg=CARD, fg=ACCENT,
-                  relief="solid", bd=1, font=FONT, padx=12, pady=5).pack(side="left", padx=8)
-        tk.Button(r2, text="数据目录", command=self.open_data_dir, bg=CARD, fg=MUTED,
-                  relief="solid", bd=1, font=FONT, padx=12, pady=5).pack(side="left")
-        tk.Label(r2, text="关闭窗口即停止服务", bg=BG, fg=MUTED, font=FONT).pack(side="right")
-
-        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
-
-    def render_addresses(self):
-        for w in self.addr_box.winfo_children():
-            w.destroy()
-
-        primary, others = local_ips()
-
-        def row(url, strong, note=""):
-            r = tk.Frame(self.addr_box, bg=CARD)
-            r.pack(fill="x", pady=1)
-            tk.Label(r, text=url, bg=CARD, font=FONT_MONO,
-                     fg=ACCENT if strong else MUTED, anchor="w").pack(side="left")
-            if note:
-                tk.Label(r, text=note, bg=CARD, fg=MUTED, font=FONT).pack(side="left", padx=6)
-            tk.Button(r, text="复制", font=FONT, bg=CARD, fg=MUTED, relief="flat",
-                      command=lambda x=url: self.copy_text(x)).pack(side="right")
-
-        # 手机要用的就是这个
-        row("http://%s:%d" % (primary, self.port), True, "← 手机填这个")
-        row("http://localhost:%d" % self.port, False, "← 只在本机用")
-
-        if others:
-            self.more_open = getattr(self, "more_open", False)
-            link = tk.Label(self.addr_box, bg=CARD, fg=MUTED, font=FONT, anchor="w",
-                            cursor="hand2",
-                            text=("隐藏其他网卡" if self.more_open else "其他网卡（%d 个，一般用不到）" % len(others)))
-            link.pack(fill="x", pady=(4, 0))
-            link.bind("<Button-1>", lambda e: self._toggle_more())
-            if self.more_open:
-                for ip in others:
-                    row("http://%s:%d" % (ip, self.port), False, "")
-
-        tk.Label(self.addr_box,
-                 text="手机和电脑要在同一个 WiFi。首次可能弹防火墙提示，选「允许」。",
-                 bg=CARD, fg=MUTED, font=FONT, anchor="w").pack(fill="x", pady=(6, 0))
-
-    def _toggle_more(self):
-        self.more_open = not getattr(self, "more_open", False)
-        self.render_addresses()
-
-    # ---- 动作 ----
-    def copy_text(self, text):
-        self.root.clipboard_clear()
-        self.root.clipboard_append(text)
-        self.write_log("已复制：" + text)
-
-    def copy_code(self):
-        self.copy_text(HUB.pair_code)
-
-    def rotate_code(self):
-        old = HUB.pair_code
-        HUB.pair_code = "%06d" % (int.from_bytes(os.urandom(3), "big") % 1000000)
-        self.lbl_code.configure(text=HUB.pair_code)
-        self.write_log("配对码已更换：%s → %s（旧令牌仍有效）" % (old, HUB.pair_code))
-
-    def apply_alias(self):
-        a = self.alias_var.get().strip()[:40]
-        if not a:
-            return
-        HUB.alias = a
-        self.write_log("设备名称改为：" + a)
-
-    def toggle_autostart(self):
-        f = autostart_file()
-        if not f:
-            self.write_log("这台机器找不到启动文件夹，跳过")
-            return
-        try:
-            if self.autostart_var.get():
-                if getattr(sys, "frozen", False):
-                    target = os.path.abspath(sys.executable)
-                else:
-                    target = os.path.abspath(__file__)
-                with io.open(f, "w", encoding="gbk", errors="ignore") as fh:
-                    fh.write("@echo off\r\n")
-                    if getattr(sys, "frozen", False):
-                        fh.write('start "" "%s"\r\n' % target)
-                    else:
-                        fh.write('start "" pythonw "%s"\r\n' % target)
-                self.write_log("已加入开机启动：" + f)
-            else:
-                if os.path.exists(f):
-                    os.remove(f)
-                self.write_log("已取消开机启动")
-        except Exception as e:
-            self.write_log("设置开机启动失败：%s" % e)
-
-    def open_browser(self):
-        webbrowser.open("http://127.0.0.1:%d/" % self.port)
-
-    def open_data_dir(self):
-        try:
-            os.startfile(DATA_DIR)
-        except Exception:
-            self.write_log("数据目录：" + DATA_DIR)
-
-    def toggle_service(self):
-        if self.srv:
-            self.stop()
-        else:
-            self.start()
-
-    def start(self):
-        if self.srv:
-            return
-        try:
-            self.srv = start_server(self.port, self.assets, self.www_dir)
-        except Exception as e:
-            messagebox.showerror("启动失败", "端口 %d 无法监听：\n%s" % (self.port, e))
-            return
-        self.disc = Discovery(self.port)
-        self.disc.start()
-        HUB.running = True
-        self.btn_toggle.configure(text="停止服务", bg="#B0453B")
-        self.lbl_state.configure(text="●  运行中  :%d" % self.port)
-        self.write_log("服务已启动 http://localhost:%d" % self.port)
-        if not self.opened_by_hand:
-            self.root.after(600, self.open_browser)
-
-    def stop(self):
-        if self.srv:
-            try:
-                self.srv.shutdown()
-                self.srv.server_close()
-            except Exception:
-                pass
-            self.srv = None
-        if self.disc:
-            self.disc.stop()
-            self.disc = None
-        HUB.running = False
-        self.btn_toggle.configure(text="启动服务", bg=ACCENT)
-        self.lbl_state.configure(text="●  已停止")
-        self.write_log("服务已停止")
-
-    def on_close(self):
-        self.stop()
-        self.root.destroy()
-
-    # ---- 日志与刷新 ----
-    def write_log(self, message):
-        line = time.strftime("%H:%M:%S") + "  " + message
-        self.log_box.configure(state="normal")
-        self.log_box.insert("end", line + "\n")
-        self.log_box.see("end")
-        self.log_box.configure(state="disabled")
-
-    def refresh_peers(self):
-        peers = HUB.peer_list()
-        self.peer_list.delete(0, "end")
-        for p in peers:
-            self.peer_list.insert("end", "%-14s %s:%d" % (p["alias"][:14], p["address"], p["port"]))
-        self.lbl_peers.configure(text=("共 %d 台" % len(peers)) if peers else "还没有发现别的设备")
-
-    def _poll(self):
-        for line in HUB.take_logs():
-            self.log_box.configure(state="normal")
-            self.log_box.insert("end", line + "\n")
-            self.log_box.see("end")
-            self.log_box.configure(state="disabled")
-        self.refresh_peers()
-        self.root.after(1200, self._poll)
+    tk.Button(root, text="再打开一次界面", command=open_again, bg="#2E7BD6", fg="white",
+              relief="flat", font=("Microsoft YaHei UI", 9), padx=12, pady=4).pack(pady=6)
+    webbrowser.open(url)
+    root.mainloop()
 
 
 # ---------------------------------------------------------------- 入口
@@ -927,26 +675,62 @@ def main():
     ensure_dirs()
     HUB.load_tokens()
 
-    # 已经在跑就直接打开界面，不开第二个实例
+    # 已经在跑就直接把窗口带出来，不起第二个
     if already_running(DEFAULT_PORT):
-        webbrowser.open("http://127.0.0.1:%d/" % DEFAULT_PORT)
+        win = launch_app_window("http://127.0.0.1:%d/" % DEFAULT_PORT)
+        if win is None:
+            webbrowser.open("http://127.0.0.1:%d/" % DEFAULT_PORT)
+        if win is not None:
+            try:
+                win.wait()
+            except Exception:
+                pass
         return
 
     assets = load_assets()
     www_dir = os.path.join(base_dir(), "www")
     if assets is None and not os.path.isdir(www_dir):
-        root = tk.Tk()
-        root.withdraw()
-        messagebox.showerror(
-            "缺少界面资源",
-            "这个程序里没有内嵌前端文件，旁边也没有 www 目录。\n\n"
-            "请用 embed_assets.py 生成带资源的版本后再打包。")
+        try:
+            import tkinter as tk
+            from tkinter import messagebox
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showerror("缺少界面资源",
+                                 "这个程序里没有内嵌前端文件，旁边也没有 www 目录。\n\n"
+                                 "请先运行 embed_assets.py 生成带资源的版本再打包。")
+        except Exception:
+            pass
         return
 
     port = find_free_port(DEFAULT_PORT)
-    root = tk.Tk()
-    App(root, assets, www_dir, port, opened_by_hand=False)
-    root.mainloop()
+    srv = start_server(port, assets, www_dir)
+    disc = Discovery(port)
+    disc.start()
+
+    url = "http://127.0.0.1:%d/" % port
+    HUB.log("服务已启动 %s" % url)
+
+    win = launch_app_window(url)
+    if win is None:
+        HUB.log("没找到 Edge / Chrome，改用系统默认浏览器")
+        try:
+            fallback_window(url)
+        finally:
+            disc.stop()
+            srv.shutdown()
+            srv.server_close()
+        return
+
+    HUB.log("窗口已打开，关掉它就会退出")
+    try:
+        win.wait()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        HUB.log("窗口已关闭，正在退出")
+        disc.stop()
+        srv.shutdown()
+        srv.server_close()
 
 
 if __name__ == "__main__":
