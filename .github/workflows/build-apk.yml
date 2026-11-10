@@ -103,15 +103,28 @@ jobs:
 
       - name: 校验产物签名指纹
         run: |
-          APK=android/app/build/outputs/apk/debug/app-debug.apk
           SDK=${ANDROID_HOME:-/usr/local/lib/android/sdk}
           BT=$(ls -d "$SDK"/build-tools/*/ 2>/dev/null | sort -V | tail -1)
+          AS="${BT}apksigner"
           echo "build-tools: $BT"
-          if [ -x "${BT}apksigner" ]; then
-            "${BT}apksigner" verify --print-certs "$APK" | grep -i "SHA-256" || true
-          else
-            echo "(apksigner 不可用，跳过)"
-          fi
+          for APK in android/app/build/outputs/apk/debug/*.apk android/app/build/outputs/apk/release/*.apk; do
+            [ -e "$APK" ] || continue
+            echo "=== $(basename "$APK")"
+            if [ -x "$AS" ]; then
+              "$AS" verify --print-certs "$APK" | grep -i "SHA-256 digest" || true
+            fi
+          done
+          {
+            echo "### 签名指纹"
+            echo ""
+            echo "| APK | 证书 SHA-256 |"
+            echo "|---|---|"
+            for APK in android/app/build/outputs/apk/debug/*.apk android/app/build/outputs/apk/release/*.apk; do
+              [ -e "$APK" ] || continue
+              D=$("$AS" verify --print-certs "$APK" 2>/dev/null | grep -i "SHA-256 digest" | head -1 | sed 's/.*digest: //')
+              echo "| $(basename "$APK") | \`$D\` |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: 显示产物
         run: ls -lh android/app/build/outputs/apk/debug/ android/app/build/outputs/apk/release/ 2>/dev/null
