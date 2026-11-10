@@ -21,15 +21,25 @@
 它做三件事：
 
 ```
-1. bun run build              前端 → www/
-2. py desktop\embed_assets.py  www/ → 内嵌进单文件
-3. pyinstaller --onefile      单文件 → desktop\dist\钥匙.exe
+1. bun run build               前端 → www/
+2. py desktop\embed_assets.py   www/ → desktop\钥匙-打包用.py
+3. pyinstaller --onefile        → desktop\dist\钥匙.exe
 ```
 
 约 1 分钟，产物 12 MB，跑完自动打开输出目录。
 
 > 改了前端只跑这个 bat 就行，不用记命令。
 > （bat 里所有中文都用 GBK 编码写的，cmd 才能正确解析。）
+
+### ⚠️ 用 Builder 手动打包时选哪个文件
+
+| 文件 | 能不能打包 |
+|---|---|
+| `desktop\钥匙-打包用.py` | ✅ **选这个**（164 KB，界面已内嵌） |
+| `desktop\keyapp_desktop.py` | ❌ 别选（34 KB，开发源码，没有界面） |
+
+选了后者，exe 打开会弹「打包时选错了源文件」。
+那个文件只在开发时用 `py desktop\keyapp_desktop.py` 直接跑。
 
 ## 用起来什么样
 

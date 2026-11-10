@@ -5,7 +5,7 @@
     py desktop/embed_assets.py
 
 输出：
-    desktop/keyapp_desktop_build.py   ← 交给 Builder_v0.1.4.exe 打包的就是这个
+    desktop/钥匙-打包用.py    ← 交给 Builder 打包的就是这个（名字带中文，不会选错）
 
 为什么要内嵌：Builder 调 PyInstaller 时没有 --add-data，
 所以前端必须以数据形式写在 .py 里，否则 exe 里没有界面。
@@ -89,7 +89,7 @@ def main():
     replacement = "ASSETS_B64 = (\n%s\n)" % wrapped
     code = code.replace(marker, replacement, 1)
 
-    out_py = os.path.join(HERE, "keyapp_desktop_build.py")
+    out_py = os.path.join(HERE, "钥匙-打包用.py")
     with io.open(out_py, "w", encoding="utf-8", newline="\n") as f:
         f.write(code)
 
@@ -98,9 +98,17 @@ def main():
     print("压缩后   : %.1f KB" % (len(raw.getvalue()) / 1024.0))
     print("base64   : %.1f KB" % (len(blob) / 1024.0))
     print("生成     : %s" % out_py)
+    # 顺手把旧的中间文件删掉，免得又有人选错
+    stale = os.path.join(HERE, "keyapp_desktop_build.py")
+    if os.path.exists(stale):
+        try:
+            os.remove(stale)
+        except Exception:
+            pass
+
     print("")
-    print("下一步：用 Builder_v0.1.4.exe 打包这个文件")
-    print("  源文件   desktop\\keyapp_desktop_build.py")
+    print("下一步：用 Builder 打包下面这个文件（注意是「打包用」那个）")
+    print("  源文件   desktop\\" + os.path.basename(out_py))
     print("  语言     Python")
     print("  勾选     单文件 + 无控制台窗口")
     print("  图标     可以选 F:\\AI Tool\\desktop\\icon.ico（如果有）")

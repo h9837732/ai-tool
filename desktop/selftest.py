@@ -10,7 +10,7 @@ import urllib.error
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-TARGET = os.path.join(HERE, "keyapp_desktop_build.py")
+TARGET = os.path.join(HERE, "钥匙-打包用.py")
 
 spec = importlib.util.spec_from_file_location("kd", TARGET)
 kd = importlib.util.module_from_spec(spec)

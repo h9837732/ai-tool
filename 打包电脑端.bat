@@ -25,9 +25,14 @@ if errorlevel 1 (
   goto fail
 )
 
+if not exist "desktop\钥匙-打包用.py" (
+  echo       失败: 没生成 desktop\钥匙-打包用.py
+  goto fail
+)
+
 echo.
 echo [3/3] 打包 exe，大约 1 分钟 ...
-py -m PyInstaller --onefile --windowed --name 钥匙 --distpath "desktop\dist" --workpath "%TEMP%\keyapp-pyi" --specpath "%TEMP%\keyapp-pyi" desktop\keyapp_desktop_build.py
+py -m PyInstaller --onefile --windowed --name 钥匙 --distpath "desktop\dist" --workpath "%TEMP%\keyapp-pyi" --specpath "%TEMP%\keyapp-pyi" "desktop\钥匙-打包用.py"
 if errorlevel 1 (
   echo       失败: PyInstaller 出错
   goto fail

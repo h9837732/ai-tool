@@ -905,9 +905,13 @@ def main():
             root = tk.Tk()
             root.withdraw()
             messagebox.showerror(
-                "缺少界面资源",
-                "这个程序里没有内嵌前端文件，旁边也没有 www 目录。\n\n"
-                "请先运行 embed_assets.py 生成带资源的版本再打包。")
+                "打包时选错了源文件",
+                "这个 exe 里没有内嵌界面。\n\n"
+                "原因是打包时选了「keyapp_desktop.py」（开发源码，\n"
+                "里面没有界面资源），应该选：\n\n"
+                "    desktop\\钥匙-打包用.py\n\n"
+                "先运行 打包电脑端.bat（或 py desktop\\embed_assets.py）\n"
+                "生成这个文件，再用它打包。")
         except Exception:
             pass
         return
