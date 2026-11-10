@@ -34,12 +34,26 @@ App 启动 3.5 秒后查一次版本（6 小时内不重复查），发现新版
 1. **自定义 JSON**（设置 → 关于 → 更新地址里填）
 2. **GitHub Releases API**（`repos/h9837732/ai-tool/releases/latest`）
 
+**仓库已经设置为公开**，所以默认源直接可用，不用任何配置：
+
+```
+https://api.github.com/repos/h9837732/ai-tool/releases/latest
+→ { "tag_name": "v1.1.0", "assets": [{ "browser_download_url": "...apk" }] }
+```
+
 | 场景 | 能不能只用默认源 |
 |---|---|
-| 仓库公开 + 打了 `v*` 标签 | ✅ 零配置，直接能用 |
-| 仓库私有 | ❌ 匿名请求返回 404，需要填自定义地址 |
+| 仓库公开 + 打了 `v*` 标签 | ✅ 零配置，已实测可用 |
+| 仓库私有 | ❌ 匿名请求返回 404，需要自填「更新地址」 |
 
-**私有仓库怎么办**：随便找个公开的地方放一个 JSON，把地址填进「更新地址」即可。
+以后发版的完整流程：
+
+```bash
+git tag v1.2.0
+git push origin v1.2.0
+```
+
+→ CI 编出签名 release APK → 挂到 Release → 已装的 App 下次启动就能看到「发现新版本 1.2.0」。
 
 ```json
 { "version": "1.2.0", "url": "https://你的下载地址/keyapp-1.2.0.apk", "notes": "改了什么" }
