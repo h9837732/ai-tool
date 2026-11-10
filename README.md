@@ -25,11 +25,18 @@
 **前提**：这个 App 是纯静态前端，网页无法监听端口，所以必须有一端跑一个小程序。
 方案是**在电脑上跑局域网桥**，手机连同一个 WiFi。不走任何云端，数据不经过第三方。
 
-### 启动桥服务
+### 两种跑法
+
+**A. 电脑端软件（推荐，有窗口）**
+
+见 [desktop/README.md](desktop/README.md)。打包成 `钥匙.exe` 后双击即可，
+窗口里能看配对码、地址、附近设备、日志，还能设开机自启。
+
+**B. 命令行（改代码时用）**
 
 ```bash
 cd "F:\AI Tool"
-bun run server/lan.mjs
+bun run lan
 ```
 
 终端会打印：
@@ -549,7 +556,10 @@ F:\AI Tool\
 ├── js/billing.js               余额接口 / 充值入口 / API Key 教程数据
 ├── js/bill.js                  计费时段判断、余额解析、本机用量统计
 ├── js/sync.js                  局域网同步客户端（配对、同步、文件传输）
-├── server/lan.mjs              局域网桥服务（电脑上跑）
+├── server/lan.mjs              局域网桥服务（Bun 版，命令行跑）
+├── desktop/keyapp_desktop.py   电脑端软件（Python + tkinter，可打包 exe）
+├── desktop/embed_assets.py     把前端压进单文件，给 PyInstaller 用
+├── desktop/selftest.py         25 项接口自测，不需要界面
 ├── js/i18n.js                  中英文文案表 ← 加语言或改文案只改这里
 ├── js/secure.js                原生能力封装（钥匙串加密 + 原生 HTTP）
 ├── js/providers.js             服务商预设表 ← 加新服务商只改这里

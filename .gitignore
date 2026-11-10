@@ -21,3 +21,10 @@ Thumbs.db
 
 # 局域网桥的运行时数据（令牌、同步状态、收到的文件）
 server/data/
+# 电脑端
+desktop/keyapp_desktop_build.py
+keyapp-data/
+*.spec
+build/
+__pycache__/
+*.pyc
