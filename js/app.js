@@ -7,6 +7,24 @@
 
   var CHANGELOG = [
     {
+      v: '1.3.1',
+      date: '2026-11',
+      zh: [
+        '借鉴 LocalSend：UDP 组播自动发现，不用再手抄 IP',
+        '连接页新增「附近的电脑」，点「用这台」自动填地址',
+        '桥服务启动即广播，之后每 30 秒一次，10 分钟没动静视为离线',
+        '用 fingerprint 识别自己，避免自发现回声',
+        '不用 LocalSend 的 HTTPS 自签证书：浏览器会拦，改用配对码 + 令牌'
+      ],
+      en: [
+        'Borrowed from LocalSend: UDP multicast discovery, no more copying IPs',
+        'New "Nearby computers" list — tap to fill in the address',
+        'The bridge announces on start and every 30s; silent peers expire after 10 min',
+        'Fingerprint identifies self to avoid echo self-discovery',
+        'Skipped LocalSend HTTPS self-signed certs (browsers reject them); pairing code + token instead'
+      ]
+    },
+    {
       v: '1.3.0',
       date: '2026-11',
       zh: [
@@ -2237,6 +2255,35 @@
     if (!linkFiles.length) el.fileList.innerHTML = '<p class="none">' + esc(t('link.noFiles')) + '</p>';
   }
 
+  var nearbyPeers = [];
+
+  async function refreshNearby() {
+    if (!el.nearbyCard) return;
+    if (!Sync.isConnected()) { el.nearbyCard.hidden = true; return; }
+
+    el.nearbyCard.hidden = false;
+    el.nearbyHint.textContent = t('link.scanning');
+    var r = await Sync.peers();
+    if (!r.ok) {
+      el.nearbyHint.textContent = t('link.scanFail', { msg: r.error || 'error' });
+      return;
+    }
+    nearbyPeers = r.peers || [];
+    if (!nearbyPeers.length) {
+      el.nearbyHint.textContent = t('link.scanEmpty');
+      el.nearbyList.innerHTML = '';
+      return;
+    }
+    el.nearbyHint.textContent = t('link.scanFound', { n: nearbyPeers.length });
+    el.nearbyList.innerHTML = nearbyPeers.map(function (p, i) {
+      return '<div class="file-row">' +
+        '<span class="file-name">' + esc(p.alias || p.address) + '</span>' +
+        '<span class="file-size">' + esc(p.address + ':' + p.port) + '</span>' +
+        '<button class="mini-btn" type="button" data-peer="' + i + '">' + esc(t('link.useThis')) + '</button>' +
+        '</div>';
+    }).join('');
+  }
+
   function openPairForm(prefillUrl) {
     el.pairForm.hidden = false;
     el.pairUrl.value = prefillUrl || (Sync.connection() ? Sync.connection().url : '') || '';
@@ -2659,7 +2706,7 @@
     state.settingsTab = name || 'keys';
     renderTabs();
     if (state.settingsTab === 'usage') renderUsagePane();
-    if (state.settingsTab === 'link') { renderLinkPane(); refreshFiles(); }
+    if (state.settingsTab === 'link') { renderLinkPane(); refreshFiles(); refreshNearby(); }
     el.settings.querySelector('.sheet-body').scrollTop = 0;
   }
 
@@ -3203,6 +3250,15 @@
         toast(t('link.disconnected'));
       }
     });
+    el.btnScanNearby.addEventListener('click', refreshNearby);
+    el.nearbyList.addEventListener('click', function (e) {
+      var b = e.target.closest ? e.target.closest('[data-peer]') : null;
+      if (!b) return;
+      var p = nearbyPeers[Number(b.dataset.peer)];
+      if (!p) return;
+      openPairForm('http://' + p.address + ':' + p.port);
+      toast(t('link.fillFromPeer', { name: p.alias || p.address }));
+    });
     el.btnPair.addEventListener('click', doPair);
     el.btnPairCancel.addEventListener('click', function () { el.pairForm.hidden = true; });
     el.pairCode.addEventListener('keydown', function (e) {
@@ -3417,6 +3473,10 @@
     el.btnSfCancel = $('btnSfCancel');
     el.btnCloseSkills = $('btnCloseSkills');
 
+    el.nearbyCard = $('nearbyCard');
+    el.nearbyHint = $('nearbyHint');
+    el.nearbyList = $('nearbyList');
+    el.btnScanNearby = $('btnScanNearby');
     el.linkBadge = $('linkBadge');
     el.linkState = $('linkState');
     el.linkWhere = $('linkWhere');

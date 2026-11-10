@@ -21,12 +21,18 @@
 
 import { mkdir, readFile, writeFile, readdir, stat, unlink } from "node:fs/promises";
 import { join, extname, basename } from "node:path";
+import { startDiscovery, makeFingerprint } from "./discovery.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
 const WEB_ROOT = decodeURIComponent(ROOT);
 const DATA_DIR = join(WEB_ROOT, "server", "data");
 const FILE_DIR = join(DATA_DIR, "files");
 const PORT = Number(process.env.PORT || 8787);
+const DEVICE_ALIAS = String(process.env.ALIAS || (await import("node:os")).hostname()).slice(0, 40);
+
+/* LocalSend 风格发现的邻居设备：fingerprint → peer */
+const discovered = new Map();
+const SELF_FINGERPRINT = makeFingerprint(String(Number(process.env.PORT || 8787)));
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -215,6 +221,24 @@ const server = Bun.serve({
 
     const tokens = await loadTokens();
 
+    /* --- LocalSend 风格的自报家门：对方收到广播后回这一发 --- */
+    if (path === "/api/register" && req.method === "POST") {
+      const body = await req.json().catch(() => ({}));
+      /* 自己回声不要记进邻居列表 */
+      if (body && body.app === "keyapp" && body.fingerprint && String(body.fingerprint) !== SELF_FINGERPRINT) {
+        discovered.set(String(body.fingerprint), {
+          fingerprint: String(body.fingerprint),
+          alias: String(body.alias || "unknown").slice(0, 40),
+          address: (srv.requestIP(req) || {}).address || "",
+          port: Number(body.port) || 0,
+          at: Date.now()
+        });
+      }
+      return new Response(JSON.stringify({ ok: true, alias: DEVICE_ALIAS }), {
+        headers: { ...CORS, "content-type": "application/json" }
+      });
+    }
+
     /* --- 配对：用配对码换令牌 --- */
     if (path === "/api/pair" && req.method === "POST") {
       const body = await req.json().catch(() => ({}));
@@ -242,6 +266,16 @@ const server = Bun.serve({
           status: 401,
           headers: { ...CORS, "content-type": "application/json" }
         });
+      }
+
+      if (path === "/api/peers") {
+        return new Response(
+          JSON.stringify({
+            self: { alias: DEVICE_ALIAS, port: PORT },
+            peers: Array.from(discovered.values()).filter((p) => p.fingerprint !== SELF_FINGERPRINT)
+          }),
+          { headers: { ...CORS, "content-type": "application/json" } }
+        );
       }
 
       if (path === "/api/info") {
@@ -360,6 +394,29 @@ const server = Bun.serve({
   }
 });
 
+/* ---------- 局域网发现（照 LocalSend 的组播思路） ---------- */
+
+let discovery = null;
+try {
+  discovery = await startDiscovery({
+    port: PORT,
+    alias: DEVICE_ALIAS,
+    log: (m) => console.log("  [发现] " + m),
+    onPeer: (peer) => {
+      discovered.set(peer.fingerprint, { ...peer, at: Date.now() });
+    }
+  });
+} catch (e) {
+  console.log("  [发现] 组播启动失败（不影响手动填地址）：" + e.message);
+}
+
+process.on("SIGINT", async () => {
+  if (discovery) await discovery.stop();
+  console.log("");
+  console.log("  已停止");
+  process.exit(0);
+});
+
 /* ---------- 启动提示 ---------- */
 
 const nets = Object.values(
@@ -379,5 +436,8 @@ for (const ip of nets) {
 }
 console.log("  电脑访问  http://localhost:" + PORT);
 console.log("");
+if (discovery) {
+  console.log("  已开启自动发现：手机装好 App 打开「连接」页就能看到这台电脑。");
+}
 console.log("  手机和电脑要在同一个 WiFi 下。关掉这个窗口服务就停了。");
 console.log("");

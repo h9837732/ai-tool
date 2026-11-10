@@ -1915,3 +1915,6 @@ input[type="color"]::-webkit-color-swatch {
   font-size: 10.5px;
   color: var(--muted);
 }
+
+.nearby-list { display: flex; flex-direction: column; }
+.nearby-list:empty { display: none; }

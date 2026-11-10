@@ -223,6 +223,15 @@
 
       'settings.tabLink': '连接',
 
+      'link.nearby': '附近的电脑',
+      'link.rescan': '重新搜索',
+      'link.scanning': '正在搜索同一 WiFi 下的其他设备…',
+      'link.scanEmpty': '没找到别的设备。确认对方也开着「钥匙」并且在同一 WiFi。',
+      'link.scanFound': '发现 {n} 台设备',
+      'link.scanFail': '搜索失败：{msg}',
+      'link.useThis': '用这台',
+      'link.fillFromPeer': '已填入「{name}」的地址，再输入它的配对码',
+
       'link.title': '手机与电脑',
       'link.connected': '已连接',
       'link.offline': '未连接',
@@ -594,6 +603,15 @@
       'toast.secureFail': 'System keystore unavailable; keys stay in plain text',
 
       'settings.tabLink': 'Link',
+
+      'link.nearby': 'Nearby computers',
+      'link.rescan': 'Scan again',
+      'link.scanning': 'Looking for other devices on this WiFi…',
+      'link.scanEmpty': 'Nothing found. Make sure the other device runs Key and is on the same WiFi.',
+      'link.scanFound': '{n} device(s) found',
+      'link.scanFail': 'Scan failed: {msg}',
+      'link.useThis': 'Use this',
+      'link.fillFromPeer': 'Filled in the address of "{name}" — now enter its code',
 
       'link.title': 'Phone and desktop',
       'link.connected': 'Connected',

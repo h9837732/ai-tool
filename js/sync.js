@@ -267,6 +267,24 @@
     }
   }
 
+
+  /* ---------- 自动发现（照 LocalSend 的思路） ----------
+     浏览器不能加入 UDP 组播，所以发现是「问服务端要它听见的邻居」：
+     电脑上的桥服务在组播组里广播，手机连上任意一台后就能看到其他电脑。
+     另外提供「手动扫一扫」：让桥服务立刻再广播一次。 */
+
+  async function peers() {
+    if (!isConnected()) return { ok: false, error: 'notconnected' };
+    try {
+      var res = await fetch(conn.url + '/api/peers', { headers: headers() });
+      if (!res.ok) return { ok: false, error: 'HTTP ' + res.status };
+      var j = await res.json();
+      return { ok: true, self: j.self, peers: (j && j.peers) || [] };
+    } catch (e) {
+      return { ok: false, error: 'network' };
+    }
+  }
+
   global.Sync = {
     isConnected: isConnected,
     connection: connection,
@@ -275,6 +293,7 @@
     disconnect: disconnect,
     info: info,
     syncNow: syncNow,
+    peers: peers,
     uploadFile: uploadFile,
     listFiles: listFiles,
     downloadFile: downloadFile,
