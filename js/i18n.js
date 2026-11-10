@@ -223,6 +223,13 @@
 
       'settings.tabUsage': '用量',
 
+      'period.offPeakNow': '空闲时段 · 半价',
+      'period.remainToPeak': '{m}后转高峰',
+      'period.hide': '不再提示',
+      'period.hidden': '已关闭这条提示，可在「设置 → 用量」重新打开',
+      'period.showBar': '在对话页顶部显示提示',
+      'period.hideBar': '关闭对话页顶部提示',
+
       'usage.period': '当前计费时段',
       'usage.peak': '高峰',
       'usage.offPeak': '空闲',
@@ -540,6 +547,13 @@
       'toast.secureFail': 'System keystore unavailable; keys stay in plain text',
 
       'settings.tabUsage': 'Usage',
+
+      'period.offPeakNow': 'Off-peak · half price',
+      'period.remainToPeak': 'peak in {m}',
+      'period.hide': 'Hide this',
+      'period.hidden': 'Banner hidden. Re-enable it under Settings → Usage.',
+      'period.showBar': 'Show the banner on the chat screen',
+      'period.hideBar': 'Hide the chat-screen banner',
 
       'usage.period': 'Current billing period',
       'usage.peak': 'Peak',

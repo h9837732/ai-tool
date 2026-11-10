@@ -36,6 +36,16 @@
     </button>
   </header>
 
+  <div class="period-bar" id="periodBar" hidden>
+    <button class="period-main" id="periodMain" type="button">
+      <span class="period-dot"></span>
+      <span class="period-label" id="periodLabel"></span>
+      <span class="period-more" id="periodMore"></span>
+      <svg class="period-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5"/></svg>
+    </button>
+    <button class="period-x" id="periodClose" type="button" aria-label="关闭" data-i18n-aria="period.hide">×</button>
+  </div>
+
   <div class="update-bar" id="updateBar" hidden>
     <span class="update-icon">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5"/><path d="M4 19h16"/></svg>
@@ -236,6 +246,7 @@
         </div>
         <p class="card-text" id="periodText"></p>
         <p class="card-note" id="periodNote"></p>
+        <p class="card-note"><button class="text-btn" id="btnPeriodBar" type="button" data-i18n="period.showBar">在对话页顶部显示提示</button></p>
       </section>
 
       <!-- 余额 -->

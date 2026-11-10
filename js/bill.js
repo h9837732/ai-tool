@@ -30,27 +30,38 @@
     });
     var peak = weekday && inWindow;
 
-    /* 下一次切换的时间（分钟数） */
-    var nextAt = null;
+    /* 下一次切换还有多少分钟。
+       空闲状态要能跨天找下一个高峰（周日晚 → 周一早 9:00 也要算），
+       所以这里最多往后看 8 天。 */
+    var remain = null;
     if (peak) {
       for (var i = 0; i < PEAK_WINDOWS.length; i++) {
-        if (t.minutes < PEAK_WINDOWS[i][1]) { nextAt = PEAK_WINDOWS[i][1]; break; }
+        if (t.minutes < PEAK_WINDOWS[i][1]) { remain = PEAK_WINDOWS[i][1] - t.minutes; break; }
       }
     } else {
-      if (weekday) {
-        for (var j = 0; j < PEAK_WINDOWS.length; j++) {
-          if (t.minutes < PEAK_WINDOWS[j][0]) { nextAt = PEAK_WINDOWS[j][0]; break; }
-        }
-      }
+      remain = minutesUntilNextPeak(t.day, t.minutes);
     }
 
-    var remain = nextAt === null ? null : nextAt - t.minutes;
     return {
       peak: peak,
       weekday: weekday,
       hhmm: t.hhmm,
       remainMinutes: remain
     };
+  }
+
+  /* 从「星期 day 的第 minutes 分钟」起，到下一个高峰开始还有多少分钟 */
+  function minutesUntilNextPeak(day, minutes) {
+    for (var add = 0; add <= 8; add++) {
+      var d = (day + add) % 7;
+      if (d === 0 || d === 6) continue;                 // 周末全天空闲
+      for (var w = 0; w < PEAK_WINDOWS.length; w++) {
+        var start = PEAK_WINDOWS[w][0];
+        var offset = add * 1440 + start - minutes;
+        if (offset > 0) return offset;
+      }
+    }
+    return null;
   }
 
   /* ---------- 余额解析 ---------- */

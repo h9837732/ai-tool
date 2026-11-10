@@ -7,6 +7,22 @@
 
   var CHANGELOG = [
     {
+      v: '1.2.2',
+      date: '2026-11',
+      zh: [
+        '时段提示移到对话页顶栏下方，空闲时段直接提示半价',
+        '提示条显示距离转高峰还有多久，点一下跳到用量页',
+        '不想看可以点 × 关掉，在「设置 → 用量」随时开回来',
+        '修了一个跨天算不出剩余时间的问题（如周日晚到周一早）'
+      ],
+      en: [
+        'Off-peak banner moved to the chat header area',
+        'Shows the countdown to peak hours; tap it to open the Usage tab',
+        'Dismiss it with × and re-enable it under Settings → Usage',
+        'Fixed the countdown returning nothing across midnight / weekend boundaries'
+      ]
+    },
+    {
       v: '1.2.1',
       date: '2026-11',
       zh: [
@@ -1508,6 +1524,7 @@
     renderEffort();
     renderCtx();
     renderBarState();
+    renderPeriodBar();
   }
 
   function renderConvList() {
@@ -2168,6 +2185,25 @@
 
   var DAY_NAMES_ZH = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 
+  /* 顶栏下方那一条：只在「DeepSeek + 空闲时段 + 没被用户关掉」时出现 */
+  function renderPeriodBar() {
+    if (!el.periodBar) return;
+    var p = activeProfile();
+    var bill = getBilling(p ? p.providerId : 'custom');
+
+    if (!p || !bill.offPeak) { el.periodBar.hidden = true; return; }
+    if (state.prefs.periodBarOff) { el.periodBar.hidden = true; return; }
+
+    var r = Bill.deepseekPeriod(Date.now());
+    if (r.peak) { el.periodBar.hidden = true; return; }
+
+    el.periodBar.hidden = false;
+    el.periodLabel.textContent = t('period.offPeakNow');
+    el.periodMore.textContent = r.remainMinutes != null
+      ? t('period.remainToPeak', { m: fmtMinutes(r.remainMinutes) })
+      : '';
+  }
+
   function renderPeriod() {
     if (!el.periodBadge) return;
     var p = activeProfile();
@@ -2268,6 +2304,9 @@
     el.balanceWho.textContent = p ? (prov.name + ' · ' + (p.model || '')) : t('usage.noKeyShort');
     el.tutorialWho.textContent = prov ? prov.name : '-';
     renderPeriod();
+    if (el.btnPeriodBar) {
+      el.btnPeriodBar.textContent = state.prefs.periodBarOff ? t('period.showBar') : t('period.hideBar');
+    }
     renderUsageStats();
     renderMoneyLinks();
     if (!el.balanceBox.dataset.filled) {
@@ -2963,6 +3002,22 @@
       toast(t('toast.deleted'));
     });
 
+    /* 顶栏时段条 */
+    el.periodMain.addEventListener('click', function () { openSettings('usage'); });
+    el.btnPeriodBar.addEventListener('click', function () {
+      state.prefs.periodBarOff = !state.prefs.periodBarOff;
+      savePrefs();
+      renderPeriodBar();
+      el.btnPeriodBar.textContent = state.prefs.periodBarOff
+        ? t('period.showBar') : t('period.hideBar');
+    });
+    el.periodClose.addEventListener('click', function () {
+      state.prefs.periodBarOff = true;
+      savePrefs();
+      renderPeriodBar();
+      toast(t('period.hidden'), 2500);
+    });
+
     /* 用量页 */
     el.btnRefreshBalance.addEventListener('click', refreshBalance);
     el.btnResetUsage.addEventListener('click', function () {
@@ -3156,6 +3211,12 @@
     el.btnSfCancel = $('btnSfCancel');
     el.btnCloseSkills = $('btnCloseSkills');
 
+    el.periodBar = $('periodBar');
+    el.periodMain = $('periodMain');
+    el.periodLabel = $('periodLabel');
+    el.periodMore = $('periodMore');
+    el.periodClose = $('periodClose');
+    el.btnPeriodBar = $('btnPeriodBar');
     el.periodBadge = $('periodBadge');
     el.periodText = $('periodText');
     el.periodNote = $('periodNote');
@@ -3270,6 +3331,7 @@
 
     /* 时段每分钟刷一次，页面一直开着也能看到高峰/空闲切换 */
     setInterval(function () {
+      renderPeriodBar();
       if (state.settingsTab === 'usage' && el.settings.dataset.open === 'true') renderPeriod();
     }, 60000);
 
