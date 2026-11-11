@@ -229,6 +229,28 @@ jobs:
           ( cd out && for f in ./*.exe; do [ -e "$f" ] && sha256sum "$f" > "$f.sha256"; done )
           ls -lh out
 
+      - name: 清理 Release 里的过期资产
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 同一个 tag 重跑时，改过名字的旧产物会残留在 release 里，
+          # 而且会因名称排序抢占 assets[0]（老客户端取第 0 个）。
+          # 这里只保留本次期望的四个文件。
+          V="${GITHUB_REF_NAME#v}"
+          KEEP="keyapp-${V}.apk keyapp-${V}.apk.sha256 keyapp-desktop-${V}.exe keyapp-desktop-${V}.exe.sha256"
+          API="https://api.github.com/repos/${GITHUB_REPOSITORY}"
+          IDS=$(curl -s -H "Authorization: Bearer $GH_TOKEN" "$API/releases/tags/${GITHUB_REF_NAME}" \
+            | python -c "import json,sys; d=json.load(sys.stdin); [print(a['id'], a['name']) for a in d.get('assets', [])]")
+          echo "$IDS" | while read -r AID ANAME; do
+            [ -z "$AID" ] && continue
+            if ! echo " $KEEP " | grep -q " $ANAME "; then
+              echo "  删除过期资产: $ANAME"
+              curl -s -o /dev/null -X DELETE -H "Authorization: Bearer $GH_TOKEN" "$API/releases/assets/$AID"
+            fi
+          done
+          echo "清理完成"
+
       - name: 挂到 Release
         uses: softprops/action-gh-release@v2
         with:
