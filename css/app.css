@@ -1354,6 +1354,10 @@ input[type="color"]::-webkit-color-swatch {
 
 .tabs {
   display: flex;
+  /* 不参与 flex 收缩：设置面板内容变高时（窄屏中文换行）
+     这条标签栏会被压扁，按钮跟着矮到 16.9px，而中文行盒是 17px，
+     于是文字溢出按钮盒子，肉眼看到的就是“标签文字偏下/不居中”。 */
+  flex: 0 0 auto;
   gap: 4px;
   padding: 0 16px 8px;
   border-bottom: 1px solid var(--line);

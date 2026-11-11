@@ -31,3 +31,6 @@ __pycache__/
 
 # 打包产物
 desktop/dist/
+
+# UI 视觉验收产物（本地生成，别入库）
+.uiqa/
