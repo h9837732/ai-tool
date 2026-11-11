@@ -16,6 +16,17 @@ import os
 import shutil
 import subprocess
 import sys
+
+# 控制台编码兜底：CI（以及某些 Windows 环境的）stdout 是 cp1252/ascii，
+# 直接 print 中文会抛 UnicodeEncodeError 把整个构建弄挂。
+# 只放宽 errors，不改编码 —— 本地 GBK 能显示中文，行为不变。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _enc = (_stream.encoding or "").lower().replace("-", "")
+        if _enc not in ("utf8", "utf8mb4"):
+            _stream.reconfigure(errors="replace")
+    except Exception:
+        pass
 import sysconfig
 
 HERE = os.path.dirname(os.path.abspath(__file__))

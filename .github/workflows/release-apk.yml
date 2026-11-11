@@ -190,6 +190,9 @@ jobs:
 
       - name: 构建前端 + 内嵌资源 + 打包
         shell: bash
+        env:
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: '1'
         run: |
           bun run build
           python desktop/embed_assets.py
