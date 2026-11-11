@@ -201,8 +201,12 @@ jobs:
 
       - name: 校验版本号
         shell: bash
+        env:
+          PYTHONUTF8: '1'
         run: |
-          V=$(python -c "import json;print(json.load(open('package.json'))['version'])")
+          # 必须显式 utf-8：windows runner 的默认编码是 cp1252，
+          # package.json 里有中文，不带 encoding 会 UnicodeDecodeError
+          V=$(python -c "import json,io;print(json.load(io.open('package.json',encoding='utf-8'))['version'])")
           echo "package.json = $V / tag = ${GITHUB_REF_NAME}"
           if [ "v$V" != "${GITHUB_REF_NAME}" ]; then
             echo "::warning::tag 与 package.json 版本不一致，请先改 package.json"
