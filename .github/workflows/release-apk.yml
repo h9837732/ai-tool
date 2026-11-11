@@ -187,6 +187,7 @@ jobs:
         run: |
           bun run build
           python desktop/embed_assets.py
+          python desktop/check_docs.py
           python desktop/build_exe.py
 
       - name: 校验版本号

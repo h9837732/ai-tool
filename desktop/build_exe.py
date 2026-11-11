@@ -225,6 +225,19 @@ def assert_secure_store(dist_exe, work):
     return True
 
 
+def assert_docs_in_sync():
+    """README 不能和代码脱节。
+
+    1.5.0 发版时 README 里还写着 1.4.1，而所有测试都不会因此失败 ——
+    这种错误只能靠人看。所以把它变成打包时的一个硬检查。"""
+    checker = os.path.join(HERE, "check_docs.py")
+    if not os.path.isfile(checker):
+        return
+    rc = subprocess.call([sys.executable, checker], cwd=ROOT)
+    if rc != 0:
+        raise SystemExit("README 与代码不一致，先把文档补齐再打包")
+
+
 def main():
     if not os.path.isfile(BUILD_PY):
         raise SystemExit("缺 %s，先跑 py desktop/embed_assets.py" % BUILD_PY)
@@ -240,6 +253,7 @@ def main():
     os.makedirs(DIST, exist_ok=True)
 
     assert_version_baked()
+    assert_docs_in_sync()
     non_ascii_path_note()
 
     cmd = [
