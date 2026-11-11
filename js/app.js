@@ -7,6 +7,28 @@
 
   var CHANGELOG = [
     {
+      v: '1.5.1',
+      date: '2026-11',
+      zh: [
+        '修了电脑端一个卡死问题：点「语言」页签后，其余页签和配色都点不动（看不见的面板把点击吞了）',
+        '修了换配色没反应：现在点哪种就立刻生效，六种配色都能切',
+        '修了安卓端一直收不到更新：构建流水线里解析版本号的那行写错了，导致新包一直发不出来',
+        '手机连电脑改走原生请求：安卓 WebView 会拦截 http 明文请求，以前配对和同步实际一直发不出去',
+        '手机端实时同步兜底：原生长连接不可用时就定时拉取（默认 20 秒）',
+        '局域网扫描补上手机热点网段（192.168.43 / 42 / 137、172.20.10）',
+        '未打开的面板不再能接收鼠标和键盘事件'
+      ],
+      en: [
+        'Fixed a desktop freeze: after opening the Language tab, other tabs and palettes stopped responding (invisible panels were swallowing clicks)',
+        'Fixed palettes doing nothing: all six now apply immediately',
+        'Fixed Android never seeing updates: the release pipeline failed on a broken version-parsing line, so new builds were never published',
+        'Phone-to-desktop now goes through native HTTP: Android WebView blocks plain http requests, so pairing and sync were silently failing',
+        'Live sync fallback on phones: when the native event stream is unavailable it polls (20s by default)',
+        'LAN scan now covers phone hotspot ranges (192.168.43 / 42 / 137, 172.20.10)',
+        'Closed panels no longer receive mouse or keyboard events'
+      ]
+    },
+    {
       v: '1.3.4',
       date: '2026-11',
       zh: [
@@ -2988,6 +3010,21 @@
     el.scrim.dataset.open = anyOpen ? 'true' : 'false';
   }
 
+  /* 启动时把所有未打开的面板标成 inert。
+     setPanel 只在被调用时管，而「模型选择」「引导」这类面板如果从没被
+     点开过，data-open 是 undefined、inert 是 false，于是它们虽然透明，
+     却仍然可以被聚焦、也可能吞咽键盘事件。CSS 已经用 pointer-events
+     挡住了鼠标，这里把键盘/读屏那一路也补齐。 */
+  function syncInertOnBoot() {
+    var panels = document.querySelectorAll('.sheet');
+    for (var i = 0; i < panels.length; i++) {
+      var p = panels[i];
+      var open = p.dataset.open === 'true';
+      if ('inert' in p) p.inert = !open;
+      if (p.dataset.open === undefined) p.dataset.open = 'false';
+    }
+  }
+
   function openDrawer() { renderConvList(); setPanel(el.drawer, true); }
   function closeDrawer() { setPanel(el.drawer, false); }
 
@@ -3869,6 +3906,8 @@
   function init() {
     cacheDom();
     loadPrefs();
+    /* 先让所有未打开的面板变成不可交互（键盘/读屏也挡住） */
+    syncInertOnBoot();
 
     /* 语言要在渲染任何文字之前定下来 */
     I18N.setLang(state.prefs.lang || 'zh');

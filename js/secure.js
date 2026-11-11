@@ -136,13 +136,18 @@
       isNative: native,
       hasPlugin: function () { return !!http; },
       /* 返回 { ok, status, text } 或 null（不可用/失败） */
-      request: function (url, headers, bodyObj) {
+      /* bodyObj 可以直接给字符串（局域网桥用 JSON 字符串），
+         method 可选，默认 POST。
+         注意：原生路径不支持流式，也不该拿来给服务商发对话（会丢掉逐字输出）。 */
+      request: function (url, headers, bodyObj, method) {
         if (!http) return Promise.resolve(null);
+        var body = (typeof bodyObj === 'string') ? bodyObj
+          : (bodyObj == null ? '' : JSON.stringify(bodyObj));
         return Promise.resolve(http.request({
           url: url,
-          method: 'POST',
+          method: (method || 'POST').toUpperCase(),
           headers: headers || {},
-          body: JSON.stringify(bodyObj || {})
+          body: body
         })).then(function (r) {
           if (!r) return null;
           var status = Number(r.status) || 0;

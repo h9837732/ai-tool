@@ -44,6 +44,66 @@
     return h;
   }
 
+  /* ---------- 统一的请求入口 ----------
+
+     为什么需要它：安卓 App 的页面来源是 https://localhost，
+     向 http://192.168.x.x 发请求在 WebView 里属于混合内容，
+     fetch 会直接失败（连 TCP 都不会发出去）。而局域网桥就是 http。
+     所以 fetch 失败时必须改走原生 HTTP，否则手机永远连不上电脑。
+
+     返回一个和 fetch 响应尽量一致的形状：{ ok, status, json(), text(), blob() }
+     原生路径只能一次性拿到全文（不支持流式），够用。 */
+
+  function nativeHttp() {
+    return (global.Native && global.Native.NativeHttp && global.Native.NativeHttp.hasPlugin())
+      ? global.Native.NativeHttp : null;
+  }
+
+  function fakeResponse(status, text) {
+    return {
+      ok: status >= 200 && status < 300,
+      status: status,
+      text: function () { return Promise.resolve(text); },
+      json: function () {
+        try { return Promise.resolve(JSON.parse(text || '{}')); }
+        catch (e) { return Promise.resolve({}); }
+      }
+    };
+  }
+
+  /* 发请求。url 可以是相对路径（电脑端本机）或绝对地址（手机连电脑）。 */
+  async function req(url, opts) {
+    opts = opts || {};
+    var method = (opts.method || 'GET').toUpperCase();
+    var hdrs = opts.headers || {};
+    var body = opts.body;
+
+    var tries = 1;
+    var lastErr = null;
+    while (tries <= 2) {
+      try {
+        var res = await fetch(url, {
+          method: method,
+          headers: hdrs,
+          body: body,
+          cache: 'no-store'
+        });
+        return res;
+      } catch (e) {
+        lastErr = e;
+        /* 第一次失败：如果是原生 App，改走原生 HTTP 再来一次 */
+        if (tries === 1 && nativeHttp() && /^https?:\/\//i.test(url)) {
+          tries++;
+          var r = await nativeHttp().request(url, hdrs, method === 'GET' ? null : body, method);
+          if (r) return fakeResponse(r.status, r.text);
+          break;
+        }
+        break;
+      }
+    }
+    throw lastErr || new Error('network');
+  }
+
   /* 令牌失效（对端数据被清过、或换了电脑）时自动断开，
      否则界面只会显示 HTTP 401，用户不知道该干什么 */
   function authFail(res) {
@@ -71,7 +131,7 @@
 
     var res;
     try {
-      res = await fetch(base + '/api/pair', {
+      res = await req(base + '/api/pair', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ code: String(code || '').trim(), deviceName: name || deviceName() })
@@ -94,7 +154,7 @@
   async function info() {
     if (!isConnected()) return null;
     try {
-      var res = await fetch(conn.url + '/api/info', { headers: headers() });
+      var res = await req(conn.url + '/api/info', { headers: headers() });
       if (!res.ok) return null;
       return await res.json();
     } catch (e) {
@@ -194,7 +254,7 @@
     try {
       var payload = collectLocal();
       payload.device = deviceName();
-      var res = await fetch(apiBase() + '/api/sync', {
+      var res = await req(apiBase() + '/api/sync', {
         method: 'POST',
         headers: headers({ 'content-type': 'application/json' }),
         body: JSON.stringify(payload)
@@ -240,7 +300,7 @@
   async function listFiles() {
     if (!isConnected()) return { ok: false, error: 'notconnected' };
     try {
-      var res = await fetch(conn.url + '/api/files', { headers: headers() });
+      var res = await req(conn.url + '/api/files', { headers: headers() });
       if (authFail(res)) return { ok: false, error: 'reauth' };
       if (!res.ok) return { ok: false, error: await readError(res) };
       var j = await res.json();
@@ -295,7 +355,7 @@
   async function peers() {
     if (!isConnected()) return { ok: false, error: 'notconnected' };
     try {
-      var res = await fetch(conn.url + '/api/peers', { headers: headers() });
+      var res = await req(conn.url + '/api/peers', { headers: headers() });
       if (authFail(res)) return { ok: false, error: 'reauth' };
       if (!res.ok) return { ok: false, error: 'HTTP ' + res.status };
       var j = await res.json();
@@ -311,7 +371,7 @@
   async function devices() {
     if (!isConnected()) return { ok: false, error: 'notconnected' };
     try {
-      var res = await fetch(conn.url + '/api/devices', { headers: headers() });
+      var res = await req(conn.url + '/api/devices', { headers: headers() });
       if (authFail(res)) return { ok: false, error: 'reauth' };
       if (!res.ok) return { ok: false, error: 'HTTP ' + res.status };
       var j = await res.json();
@@ -324,7 +384,7 @@
   async function kickDevice(tail) {
     if (!isConnected()) return { ok: false, error: 'notconnected' };
     try {
-      var res = await fetch(conn.url + '/api/devices', {
+      var res = await req(conn.url + '/api/devices', {
         method: 'DELETE',
         headers: headers({ 'content-type': 'application/json' }),
         body: JSON.stringify({ tail: tail })
@@ -409,8 +469,12 @@
           scheduleSync(data);
         });
         es.onerror = function () {
-          if (!isConnected() && !hostMode) stopEvents();
+          if (!isConnected() && !hostMode) { stopEvents(); return; }
+          /* 连不上或断了：EventSource 会自己重连，但同时开轮询兜底，
+             这样安卓上（混合内容把 SSE 拦了）也不会完全没有实时性 */
+          startPolling();
         };
+        es.onopen = function () { stopPolling(); };
       } catch (e) {
         es = null;
         esUrl = '';
@@ -424,6 +488,38 @@
     }
     es = null;
     esUrl = '';
+    stopPolling();
+  }
+
+  /* ---------- 轮询兜底 ----------
+
+     安卓 App 里 EventSource 建不起来：页面是 https://localhost，
+     SSE 要连 http://192.168.x.x，被当成混合内容拦掉（原生 HTTP 也
+     不支持流式）。没有它就不实时了，所以退成定时拉取。
+     电脑端是 http 同源页面，SSE 正常，不会走到这里。 */
+
+  var pollTimer = null;
+  var POLL_MS = 20000;
+
+  function startPolling() {
+    if (pollTimer) return;
+    pollTimer = setInterval(function () {
+      if (typeof document !== 'undefined' && document.hidden) return;   // 后台不拉
+      if (!isConnected() && !hostMode) return;
+      syncNow().then(function (r) {
+        if (r && r.ok) {
+          dispatchChanged({ pulled: r.result && r.result.pulled,
+                            deleted: r.result && r.result.deleted });
+        }
+      }).catch(function () {});
+    }, POLL_MS);
+  }
+
+  function stopPolling() {
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
   }
 
   /* 本地改了数据 → 告诉中枢「我变了」，让别的端来拉。
@@ -432,7 +528,7 @@
     function fire() {
       touchTimer = null;
       var base = apiBase();
-      fetch(base + '/api/touch', {
+      req(base + '/api/touch', {
         method: 'POST',
         headers: headers({ 'content-type': 'application/json' }),
         body: JSON.stringify({ device: deviceName() })
@@ -469,6 +565,8 @@
     changeCb = cb;
     hookStore();
     startEvents();
+    /* EventSource 不可用（老的 WebView / 被禁用）→ 直接上轮询 */
+    if (typeof EventSource === 'undefined') startPolling();
   }
 
   function stopEvents2() { stopEvents(); }
@@ -598,7 +696,9 @@
   /* 常见家用网段。自己网段扫不到时的兵底，从 LocalSend 的经典清单抬的。 */
   var COMMON_PREFIXES = ['192.168.1', '192.168.0', '192.168.2', '192.168.31',
     '192.168.3', '192.168.4', '192.168.10', '192.168.100', '10.0.0', '10.0.1',
-    '172.16.0', '192.168.123'];
+    '172.16.0', '192.168.123',
+    /* 手机热点：安卓常见 192.168.43 / 42 / 137，iPhone 是 172.20.10 */
+    '192.168.43', '192.168.42', '192.168.137', '172.20.10'];
 
   global.Sync = {
     isConnected: isConnected,

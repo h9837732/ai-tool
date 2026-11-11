@@ -28,14 +28,29 @@ try {
     logger.warn("读取 package.json 版本失败，回退 ${pkgVersion}: ${e.message}")
 }
 
-def versionParts = pkgVersion.replaceAll(/^v/i, '').tokenize('.')
-def vMajor = versionParts.size() > 0 ? versionParts[0].toInteger() : 1
-def vMinor = versionParts.size() > 1 ? versionParts[1].toInteger() : 0
-def vPatch = versionParts.size() > 2 ? versionParts[2].toInteger() : 0
-def derivedCode = vMajor * 10000 + vMinor * 100 + vPatch
+/* 去掉可能存在的 v 前缀。
+   注意：这里**不能**写 replaceAll(/^v/i, '') —— Groovy 的斜杠字面量不是
+   JS 里的正则 + flags，它会把 /^v/ 当成一个字符串、把后面的 i 当成标识符，
+   于是变成“字符串 / 变量 i”，报：
+     Could not get unknown property 'i' for project ':app'
+   而且这个异常发生在配置阶段，android {} 根本不会执行，后面还会跟着报
+   “does not specify compileSdk”，把真正的病因盖住。
+   用 startsWith/substring 最稳，不涉及任何正则。 */
+def cleanVersion = pkgVersion.startsWith("v") || pkgVersion.startsWith("V")
+        ? pkgVersion.substring(1)
+        : pkgVersion
 
-def appVersionName = project.hasProperty('appVersionName') ? project.property('appVersionName').toString() : pkgVersion.replaceAll(/^v/i, '')
+def versionParts = cleanVersion.tokenize('.').collect { p ->
+    p.isInteger() ? p.toInteger() : 0
+}
+while (versionParts.size() < 3) { versionParts.add(0) }
+
+def derivedCode = versionParts[0] * 10000 + versionParts[1] * 100 + versionParts[2]
+
+def appVersionName = project.hasProperty('appVersionName') ? project.property('appVersionName').toString() : cleanVersion
 def appVersionCode = project.hasProperty('appVersionCode') ? project.property('appVersionCode').toString().toInteger() : derivedCode
+
+logger.lifecycle("[version] name=${appVersionName} code=${appVersionCode} (from ${project.hasProperty('appVersionName') ? '-P 参数' : 'package.json'})")
 
 android {
     namespace = "com.keyapp.chat"

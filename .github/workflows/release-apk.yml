@@ -160,7 +160,13 @@ jobs:
             - 智谱、混元等不返回跨域头的服务商已可在 App 内使用
 
   # 电脑端 exe。必须挂在同一个 Release 下，应用内更新才找得到。
+  #
+  # needs: release —— 让 APK 先上传。这不是为了速度，是为了顺序：
+  # 老版本（≤1.3.6）的安卓端取的是 assets[0]，不按扩展名挑。
+  # 如果 exe 排在前面，那些手机点更新会下到一个 exe。串行跑保证
+  # APK 是第一个 asset。
   windows:
+    needs: release
     runs-on: windows-latest
     steps:
       - name: 取代码

@@ -929,6 +929,23 @@ textarea:focus-visible {
 }
 .sheet[data-open="true"] { transform: none; }
 
+/* 关着的面板不许吃点击。
+   以前隐藏只靠 transform / opacity（桌面端是 opacity:0 的居中卡片），
+   元素仍然 pointer-events: auto 且 z-index 同为 30，于是看不见的
+   「模型选择」「引导」面板会盖在设置面板上面，把点击全吞了：
+   切到「语言」（内容短）后设置面板重新居中，页签正好落进它的矩形里，
+   后续点页签/配色全无反应，只有顶部的叉号能用。
+   注意：用 :not([data-open="true"]) 而不是自己写选择器，
+   这样任何新增面板都自动获得同样的保护。 */
+.sheet:not([data-open="true"]) {
+  pointer-events: none;
+}
+/* 抽屉和遮罩同理 */
+.drawer:not([data-open="true"]),
+.scrim:not([data-open="true"]) {
+  pointer-events: none;
+}
+
 .sheet-top {
   flex: 0 0 auto;
   display: flex;
