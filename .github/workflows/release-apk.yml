@@ -139,16 +139,21 @@ jobs:
       - name: 重命名产物
         run: |
           mkdir -p out
+          V="${GITHUB_REF_NAME#v}"
           for f in android/app/build/outputs/apk/release/*.apk; do
             [ -e "$f" ] || continue
-            cp "$f" "out/keyapp-${GITHUB_REF_NAME}-$(basename "$f")"
+            cp "$f" "out/keyapp-${V}.apk"
           done
+          # 每个产物一个独立的 .sha256 旁文件（命名 <文件名>.sha256）。
+          # 客户端在没有 digest 时会去拉它。不要用单个 checksums.txt：
+          # 两个 job 各上传一份会同名互相覆盖。
+          ( cd out && for f in ./*.apk; do [ -e "$f" ] && sha256sum "$f" > "$f.sha256"; done )
           ls -lh out
 
       - name: 挂到 Release
         uses: softprops/action-gh-release@v2
         with:
-          files: out/*.apk
+          files: out/*
           generate_release_notes: true
           body: |
             钥匙 · 自带 API Key 的 AI 对话客户端
@@ -212,8 +217,20 @@ jobs:
             echo "::warning::tag 与 package.json 版本不一致，请先改 package.json"
           fi
 
+      - name: 重命名为 ASCII 文件名
+        shell: bash
+        run: |
+          # 中文文件名上传后会被 GitHub 压成 default.exe，且排到 assets[0]，
+          # 老版本安卓端取 assets[0] 就会下到 exe。统一用 ASCII 名，
+          # 并让 APK（keyapp-<ver>.apk）在名称排序上排在 exe 之前。
+          V="${GITHUB_REF_NAME#v}"
+          mkdir -p out
+          cp "desktop/dist/钥匙.exe" "out/keyapp-desktop-${V}.exe"
+          ( cd out && for f in ./*.exe; do [ -e "$f" ] && sha256sum "$f" > "$f.sha256"; done )
+          ls -lh out
+
       - name: 挂到 Release
         uses: softprops/action-gh-release@v2
         with:
-          files: desktop/dist/钥匙.exe
+          files: out/*
           generate_release_notes: true
