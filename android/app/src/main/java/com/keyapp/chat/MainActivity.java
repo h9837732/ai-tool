@@ -10,6 +10,8 @@ public class MainActivity extends BridgeActivity {
         // 本地插件要在 super.onCreate 之前注册，否则 Bridge 拿不到
         registerPlugin(SecureStorePlugin.class);
         registerPlugin(NativeHttpPlugin.class);
+        registerPlugin(NetInfoPlugin.class);
+        registerPlugin(ApkUpdaterPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

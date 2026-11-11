@@ -85,6 +85,7 @@
     if (!j || !j.token) return { ok: false, error: 'notoken' };
 
     saveConn({ url: base, token: j.token, deviceName: name || deviceName(), at: Date.now() });
+    startEvents();
     return { ok: true };
   }
 
@@ -184,12 +185,16 @@
 
   /* 跑一次双向同步 */
   async function syncNow() {
-    if (!isConnected()) return { ok: false, error: 'notconnected' };
+    /* 本页就是服务本机（电脑端）时，用相对路径直接读写同一份数据；
+       手机端则是连到配对好的 conn.url。 */
+    if (!hostMode) await detectHost();
+    if (!isConnected() && !hostMode) return { ok: false, error: 'notconnected' };
     if (busy) return { ok: false, error: 'busy' };
     busy = true;
     try {
       var payload = collectLocal();
-      var res = await fetch(conn.url + '/api/sync', {
+      payload.device = deviceName();
+      var res = await fetch(apiBase() + '/api/sync', {
         method: 'POST',
         headers: headers({ 'content-type': 'application/json' }),
         body: JSON.stringify(payload)
@@ -200,8 +205,10 @@
       var merged = await res.json();
       var applied = applyMerged(merged);
 
-      conn.lastSyncAt = Date.now();
-      saveConn(conn);
+      if (conn) {
+        conn.lastSyncAt = Date.now();
+        saveConn(conn);
+      }
       return { ok: true, result: applied, serverTime: merged.serverTime };
     } catch (e) {
       return { ok: false, error: 'network' };
@@ -330,6 +337,142 @@
     }
   }
 
+  /* ---------- 实时同步 ----------
+
+     做法：中枢（电脑端服务）维持 SSE 长连接。任一端改了东西就
+     ① POST /api/touch 让中枢广播  ② 中枢合并后再广播一次
+     其他端收到 changed → 防抖 700ms → 跑一次 syncNow。
+
+     为什么不再轮询：以前只有「启动时 + 手点」，改了对话另一头看不见。 */
+
+  var es = null;
+  var esUrl = '';
+  var changeCb = null;
+  var touchTimer = null;
+  var syncTimer = null;
+  var hostMode = null;          // null=未知，true=本页就是这个服务（电脑端）
+
+  /* 当前页面是不是「服务本机」——电脑端就是这样：页面由 8787 自己托管。
+     这种情况不需要令牌，也不需要 conn。 */
+  function detectHost() {
+    if (hostMode !== null) return Promise.resolve(hostMode);
+    return fetch('/api/ping', { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) { hostMode = !!(j && j.app === 'keyapp'); return hostMode; })
+      .catch(function () { hostMode = false; return false; });
+  }
+
+  function eventsUrl() {
+    if (isConnected()) return conn.url + '/api/events?token=' + encodeURIComponent(conn.token || '');
+    if (hostMode) return '/api/events';
+    return '';
+  }
+
+  function apiBase() {
+    return isConnected() ? conn.url : '';
+  }
+
+  function dispatchChanged(info) {
+    if (typeof changeCb === 'function') {
+      try { changeCb(info || {}); } catch (e) { /* 忽略 */ }
+    }
+  }
+
+  function scheduleSync(info) {
+    if (syncTimer) clearTimeout(syncTimer);
+    syncTimer = setTimeout(function () {
+      syncTimer = null;
+      syncNow().then(function (r) {
+        if (r && r.ok) {
+          dispatchChanged({ pulled: r.result && r.result.pulled, deleted: r.result && r.result.deleted });
+        } else if (r && r.error === 'busy') {
+          scheduleSync(info);          // 自己正在同步，稍后再来一趟
+        }
+      }).catch(function () {});
+    }, 700);
+  }
+
+  function startEvents() {
+    if (typeof EventSource === 'undefined') return;
+    detectHost().then(function () {
+      var url = eventsUrl();
+      if (!url) { stopEvents(); return; }
+      if (es && esUrl === url) return;
+      stopEvents();
+      try {
+        es = new EventSource(url);
+        esUrl = url;
+        es.addEventListener('changed', function (ev) {
+          var data = {};
+          try { data = JSON.parse(ev.data || '{}'); } catch (e) { /* 忽略 */ }
+          /* 服务端已按令牌排除发起方，这里不用再判自己 */
+          scheduleSync(data);
+        });
+        es.onerror = function () {
+          if (!isConnected() && !hostMode) stopEvents();
+        };
+      } catch (e) {
+        es = null;
+        esUrl = '';
+      }
+    });
+  }
+
+  function stopEvents() {
+    if (es) {
+      try { es.close(); } catch (e) { /* 忽略 */ }
+    }
+    es = null;
+    esUrl = '';
+  }
+
+  /* 本地改了数据 → 告诉中枢「我变了」，让别的端来拉。
+     没配对时什么都不做（单机用不需要）。 */
+  function touch(immediate) {
+    function fire() {
+      touchTimer = null;
+      var base = apiBase();
+      fetch(base + '/api/touch', {
+        method: 'POST',
+        headers: headers({ 'content-type': 'application/json' }),
+        body: JSON.stringify({ device: deviceName() })
+      }).catch(function () {});
+    }
+    if (!isConnected() && !hostMode) return;
+    if (immediate) {
+      if (touchTimer) clearTimeout(touchTimer);
+      fire();
+      return;
+    }
+    if (touchTimer) clearTimeout(touchTimer);
+    touchTimer = setTimeout(fire, 500);
+  }
+
+  /* 把 Store 的写操作接上钩子，业务代码一处不用改 */
+  var hooked = false;
+  function hookStore() {
+    if (hooked || !global.Store) return;
+    hooked = true;
+    ['saveConv', 'removeConv', 'saveSkills'].forEach(function (fn) {
+      var orig = global.Store[fn];
+      if (typeof orig !== 'function') return;
+      global.Store[fn] = function () {
+        var r = orig.apply(global.Store, arguments);
+        try { touch(false); } catch (e) { /* 忽略 */ }
+        return r;
+      };
+    });
+  }
+
+  /* 订阅回调：另一台设备改了东西 */
+  function onChanged(cb) {
+    changeCb = cb;
+    hookStore();
+    startEvents();
+  }
+
+  function stopEvents2() { stopEvents(); }
+
   /* ---------- 免认证探测：扫描局域网用 ---------- */
 
   /* 打一台机器的 /api/ping，超时很短。命中返回设备信息，否则 null。 */
@@ -352,36 +495,64 @@
     });
   }
 
-  /* 扫描一段网段的 1-254，并发跑。
-     不用 UDP 组播：浏览器和 WebView 收不到组播包，只能这样探。 */
+  /* 扫描一批网段的 1-254。
+     App 里必须走原生（混合内容禁令），浏览器里退回 fetch 探测。 */
+  function expandTargets(prefixes) {
+    var targets = [];
+    for (var i = 0; i < prefixes.length; i++) {
+      var pre = String(prefixes[i]).replace(/\.$/, '');
+      if (!pre) continue;
+      for (var n = 1; n <= 254; n++) targets.push(pre + '.' + n);
+    }
+    return targets;
+  }
+
   async function scanLan(opts) {
     opts = opts || {};
     var prefixes = opts.prefixes || [];
     var port = opts.port || 8787;
-    var concurrency = opts.concurrency || 48;
-    var timeoutMs = opts.timeoutMs || 700;
+    var concurrency = opts.concurrency || 64;
+    var timeoutMs = opts.timeoutMs || 400;
     var onProgress = opts.onProgress || function () {};
+    var targets = expandTargets(prefixes);
+    if (!targets.length) return [];
 
-    var targets = [];
-    for (var i = 0; i < prefixes.length; i++) {
-      var pre = String(prefixes[i]).replace(/\.$/, '');
-      for (var n = 1; n <= 254; n++) targets.push(pre + '.' + n);
+    /* 原生扫描：一个 /24 一组地跑，每组回来就报进度 */
+    if (global.Native && global.Native.NetInfo && global.Native.NetInfo.hasPlugin()) {
+      var found = [];
+      var done = 0;
+      var CHUNK = 128;
+      for (var start = 0; start < targets.length; start += CHUNK) {
+        var slice = targets.slice(start, start + CHUNK);
+        var hits = await global.Native.NetInfo.scan(slice, {
+          port: port, timeoutMs: timeoutMs, concurrency: concurrency
+        });
+        if (hits === null) break;          // 插件不可用，掉到下面的 fetch 路径
+        for (var h = 0; h < hits.length; h++) {
+          var hit = hits[h];
+          if (!found.some(function (f) { return f.ip === hit.ip; })) found.push(hit);
+        }
+        done += slice.length;
+        onProgress(done, targets.length, found);
+      }
+      if (done >= targets.length) return found;
     }
-    /* 先探自己所在的那一段，命中更快 */
-    var found = [];
+
+    /* 浏览器路径：断端口探，靠超时判活 */
+    var found2 = [];
     var idx = 0;
-    var done = 0;
+    var done2 = 0;
 
     async function worker() {
       while (idx < targets.length) {
         var ip = targets[idx++];
         var hit = await probe(ip, port, timeoutMs);
-        done++;
+        done2++;
         if (hit) {
-          if (!found.some(function (f) { return f.ip === hit.ip; })) found.push(hit);
-          onProgress(done, targets.length, found);
-        } else if (done % 24 === 0) {
-          onProgress(done, targets.length, found);
+          if (!found2.some(function (f) { return f.ip === hit.ip; })) found2.push(hit);
+          onProgress(done2, targets.length, found2);
+        } else if (done2 % 24 === 0) {
+          onProgress(done2, targets.length, found2);
         }
       }
     }
@@ -389,28 +560,58 @@
     var workers = [];
     for (var w = 0; w < Math.min(concurrency, targets.length); w++) workers.push(worker());
     await Promise.all(workers);
-    onProgress(done, targets.length, found);
-    return found;
+    onProgress(done2, targets.length, found2);
+    return found2;
   }
 
-  /* 从当前页面推断网段。App 里（localhost）返回空，让调用方问用户。 */
-  function lanPrefixes() {
+  function prefixOf(ip) {
+    if (!/^\d+\.\d+\.\d+\.\d+$/.test(ip)) return '';
+    if (/^(127\.|0\.|169\.254\.)/.test(ip)) return '';
+    return ip.split('.').slice(0, 3).join('.');
+  }
+
+  /* 推断可能所在的网段。顺序就是可信度：
+       页面地址 > 已配对电脑 > 本机 IPv4（原生） */
+  async function lanPrefixes() {
     var out = [];
-    var h = location.hostname;
-    if (/^\d+\.\d+\.\d+\.\d+$/.test(h) && !h.startsWith('127.')) {
-      out.push(h.split('.').slice(0, 3).join('.'));
+    function add(p) {
+      if (p && out.indexOf(p) < 0) out.push(p);
     }
+
+    add(prefixOf(location.hostname));
+
+    if (conn && conn.url) {
+      var m = /\/\/(\d+\.\d+\.\d+\.\d+)/.exec(conn.url);
+      if (m) add(prefixOf(m[1]));
+    }
+
+    try {
+      if (global.Native && global.Native.NetInfo && global.Native.NetInfo.hasPlugin()) {
+        var ips = await global.Native.NetInfo.localIps();
+        for (var i = 0; i < ips.length; i++) add(prefixOf(ips[i]));
+      }
+    } catch (e) { /* 拿不到就算了 */ }
+
     return out;
   }
+
+  /* 常见家用网段。自己网段扫不到时的兵底，从 LocalSend 的经典清单抬的。 */
+  var COMMON_PREFIXES = ['192.168.1', '192.168.0', '192.168.2', '192.168.31',
+    '192.168.3', '192.168.4', '192.168.10', '192.168.100', '10.0.0', '10.0.1',
+    '172.16.0', '192.168.123'];
 
   global.Sync = {
     isConnected: isConnected,
     connection: connection,
     deviceName: deviceName,
     pair: pair,
-    disconnect: disconnect,
+    disconnect: function () { stopEvents(); disconnect(); },
     info: info,
     syncNow: syncNow,
+    onChanged: onChanged,
+    touch: touch,
+    startEvents: startEvents,
+    stopEvents: stopEvents,
     peers: peers,
     uploadFile: uploadFile,
     listFiles: listFiles,
@@ -420,6 +621,7 @@
     probe: probe,
     scanLan: scanLan,
     lanPrefixes: lanPrefixes,
+    COMMON_PREFIXES: COMMON_PREFIXES,
     devices: devices,
     kickDevice: kickDevice
   };

@@ -105,6 +105,87 @@ exe = EXE(
     return SPEC
 
 
+def assert_no_qt(dist_exe, work):
+    """D12 的闸门：确保 Qt 没被偷偷打进去。
+
+    本机 Python 装在 C:\\Users\\苗新田\\...，PyInstaller 的 PyQt5 钩子
+    解这种路径会崩（'C:/Users/???/...Qt5/plugins does not exist'）。
+    以前只是 excludes 挡着，万一以后有个 --collect-all 把 Qt 拉进来，
+    打包会以一个看不懂的错误失败。这里直接说清楚原因。"""
+    hits = []
+
+    for name in os.listdir(work) if os.path.isdir(work) else []:
+        if not name.endswith(".toc"):
+            continue
+        try:
+            with open(os.path.join(work, name), "r", encoding="utf-8", errors="ignore") as f:
+                txt = f.read()
+        except Exception:
+            continue
+        for token in ("Qt5Core.dll", "Qt6Core.dll", "PyQt5", "PyQt6", "PySide2", "PySide6"):
+            if token in txt:
+                hits.append(token + " @ " + name)
+
+    try:
+        with open(dist_exe, "rb") as f:
+            blob = f.read()
+        for token in (b"Qt5Core.dll", b"Qt6Core.dll"):
+            if token in blob:
+                hits.append(token.decode() + " @ exe")
+    except Exception:
+        pass
+
+    if hits:
+        print("")
+        print("!! 打包结果里混进了 Qt：" + ", ".join(sorted(set(hits))))
+        print("   本机路径含中文，Qt 钩子在此环境下会崩，也会让体积膨胀几十 MB。")
+        print("   检查是不是加了 --collect-all / --hidden-import 把 Qt 拉了进来。")
+        return False
+    return True
+
+
+def non_ascii_path_note():
+    """路径含中文时打个提醒。不是错误，我们已经有对策。"""
+    sp = site_packages()
+    if all(ord(c) < 128 for c in sp):
+        return
+    print("")
+    print("注意：Python 站点包路径含非 ASCII 字符")
+    print("   " + sp)
+    print("   已自动排除全部 Qt（PyQt/PySide），不要加 --collect-all webview。")
+
+
+def pkg_version():
+    import json
+    try:
+        with open(os.path.join(ROOT, "package.json"), "r", encoding="utf-8") as f:
+            return str(json.load(f).get("version") or "")
+    except Exception:
+        return ""
+
+
+def assert_version_baked():
+    """确保要打包的 .py 里已经写入了当前版本号。
+    （A1 的根因：改了 package.json 却没重跑 embed_assets，
+    exe 里的版本停在旧版，界面永远提示「发现新版本」。）"""
+    import re
+    want = pkg_version()
+    if not want:
+        raise SystemExit("读不到 package.json 的 version")
+    try:
+        with open(BUILD_PY, "r", encoding="utf-8", errors="ignore") as f:
+            head = f.read(4000)
+    except Exception as e:
+        raise SystemExit("读不到 %s: %s" % (BUILD_PY, e))
+    m = re.search(r'APP_VERSION = "([^"]*)"', head)
+    got = m.group(1) if m else ""
+    if got != want:
+        raise SystemExit(
+            "版本号不一致，先跑 py desktop/embed_assets.py\n"
+            "   package.json          %s\n   钥匙-打包用.py  %s" % (want, got or "(缺失)"))
+    print("版本     : %s" % want)
+
+
 def main():
     if not os.path.isfile(BUILD_PY):
         raise SystemExit("缺 %s，先跑 py desktop/embed_assets.py" % BUILD_PY)
@@ -118,6 +199,9 @@ def main():
 
     spec = write_spec()
     os.makedirs(DIST, exist_ok=True)
+
+    assert_version_baked()
+    non_ascii_path_note()
 
     cmd = [
         sys.executable, "-m", "PyInstaller",
@@ -135,8 +219,13 @@ def main():
     if not os.path.isfile(out):
         raise SystemExit("没生成 %s" % out)
 
+    ok = assert_no_qt(out, WORK)
+
     if "--keep-build" not in sys.argv:
         shutil.rmtree(WORK, ignore_errors=True)
+
+    if not ok:
+        raise SystemExit("打包结果不合格，已中止")
 
     print("")
     print("完成: %s  (%.1f MB)" % (out, os.path.getsize(out) / 1048576.0))

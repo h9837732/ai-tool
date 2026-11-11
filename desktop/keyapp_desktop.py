@@ -36,8 +36,30 @@ import urllib.request
 import webbrowser
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import unquote, quote
 
 APP_NAME = "钥匙"
+# 由 embed_assets.py 从 package.json 写入真实版本号，源码里保持占位。
+# 这样 exe 里的版本号永远和前端一致，不会再出现「关于页显示旧版本」。
+APP_VERSION = "0.0.0-dev"
+APP_REPO = "h9837732/ai-tool"
+
+
+def _dev_version():
+    """开发模式（直接跑 .py）时版本号还是占位符，去 package.json 读一个，
+    否则本地调试时「关于」页永远显示 0.0.0-dev。"""
+    global APP_VERSION
+    if not APP_VERSION.endswith("-dev"):
+        return
+    try:
+        import json as _json
+        path = os.path.join(base_dir(), "package.json")
+        if not os.path.isfile(path):
+            path = os.path.join(os.path.dirname(base_dir()), "package.json")
+        with io.open(path, "r", encoding="utf-8") as f:
+            APP_VERSION = str(_json.load(f).get("version") or APP_VERSION)
+    except Exception:
+        pass
 DISCOVERY_GROUP = "224.0.0.167"
 DISCOVERY_PORT = 53317
 DEFAULT_PORT = 8787
@@ -221,6 +243,50 @@ class Hub(object):
         self.tokens = {}
         self.peers = {}
         self.logs = []
+        # 实时推送：订阅了 /api/events 的连接。每项 {wfile, lock, alive, agent}
+        self.sse = []
+        self.sse_lock = threading.Lock()
+
+    # ---------- 实时推送 ----------
+
+    def add_sse(self, client):
+        with self.sse_lock:
+            self.sse.append(client)
+
+    def drop_sse(self, client):
+        with self.sse_lock:
+            try:
+                self.sse.remove(client)
+            except ValueError:
+                pass
+
+    def broadcast(self, kind, payload=None, origin_token=None):
+        """给所有订阅端推一条事件。谁写失败就把谁踢掉。
+
+        origin_token：不要推回发起方自己，否则「收到事件→同步→广播」会无限对抽。
+        """
+        frame = "event: %s\ndata: %s\n\n" % (
+            kind, json.dumps(payload or {}, ensure_ascii=False))
+        with self.sse_lock:
+            targets = list(self.sse)
+        dead = []
+        for c in targets:
+            if origin_token and c.get("token") == origin_token:
+                continue
+            try:
+                with c["lock"]:
+                    data = frame.encode("utf-8")
+                    c["wfile"].write(b"%x\r\n" % len(data) + data + b"\r\n")
+                    c["wfile"].flush()
+            except Exception:
+                dead.append(c)
+        for c in dead:
+            self.drop_sse(c)
+            c["alive"] = False
+
+    def sse_count(self):
+        with self.sse_lock:
+            return len(self.sse)
 
     def log(self, message):
         line = time.strftime("%H:%M:%S") + "  " + message
@@ -335,6 +401,47 @@ class Handler(BaseHTTPRequestHandler):
         self._cors()
         self.end_headers()
 
+    # ---------- 实时推送（SSE）----------
+
+    def _sse(self, token=""):
+        """长连接推送。用 chunked 编码，每条事件一个 chunk。"""
+        self.send_response(200)
+        self.send_header("content-type", "text/event-stream; charset=utf-8")
+        self.send_header("cache-control", "no-store")
+        self.send_header("connection", "keep-alive")
+        self.send_header("transfer-encoding", "chunked")
+        self.send_header("x-accel-buffering", "no")
+        self._cors()
+        self.end_headers()
+
+        client = {"wfile": self.wfile, "lock": threading.Lock(), "alive": True,
+                  "agent": self.client_address[0], "token": token}
+        HUB.add_sse(client)
+        HUB.log("实时推送：%s 已连上（共 %d 个）" % (client["agent"], HUB.sse_count()))
+
+        def chunk(text):
+            data = text.encode("utf-8")
+            with client["lock"]:
+                self.wfile.write(b"%x\r\n" % len(data) + data + b"\r\n")
+                self.wfile.flush()
+
+        try:
+            chunk("retry: 3000\n\n")
+            chunk("event: hello\ndata: %s\n\n" % json.dumps({"port": HUB.port}))
+            last = time.time()
+            while client["alive"]:
+                time.sleep(1)
+                if time.time() - last >= 15:
+                    chunk(": ping\n\n")     # 注释行当心跳，EventSource 会忽略
+                    last = time.time()
+        except Exception:
+            pass
+        finally:
+            client["alive"] = False
+            HUB.drop_sse(client)
+            self.close_connection = True
+            HUB.log("实时推送：%s 断开（剩 %d 个）" % (client["agent"], HUB.sse_count()))
+
     def do_GET(self):
         self._route("GET")
 
@@ -401,7 +508,6 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/host/file" and method == "POST":
             if not self._is_local():
                 return self._json(403, {"error": "local-only"})
-            from urllib.parse import unquote
             raw_name = unquote(self.headers.get("x-filename") or "file")
             safe = os.path.basename(raw_name)
             for ch in '\\/:*?"<>|':
@@ -423,8 +529,7 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/api/host/file/"):
             if not self._is_local():
                 return self._json(403, {"error": "local-only"})
-            from urllib.parse import unquote, quote
-            name = os.path.basename(unquote(path[len("/api/host/file/"):]))
+                name = os.path.basename(unquote(path[len("/api/host/file/"):]))
             fp = os.path.join(FILE_DIR, name)
             if method == "DELETE":
                 try:
@@ -445,7 +550,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, {
                 "app": APP_TAG, "alias": HUB.alias,
                 "url": "http://%s:%d" % (primary, HUB.port),
-                "port": HUB.port, "version": 1
+                "port": HUB.port, "version": APP_VERSION
             })
 
         if path == "/api/code":
@@ -459,6 +564,18 @@ class Handler(BaseHTTPRequestHandler):
                 "devices": len(HUB.tokens),
                 "version": "1.0",
             })
+
+        # 实时推送。EventSource 不能带 header，所以令牌走 ?token=；
+        # 本机（电脑端自己的界面）不需要令牌。
+        if path == "/api/events" and method == "GET":
+            qs = self.path.split("?", 1)[1] if "?" in self.path else ""
+            qtok = ""
+            for part in qs.split("&"):
+                if part.startswith("token="):
+                    qtok = unquote(part[6:])
+            if not (self._is_local() or HUB.check_token(qtok)):
+                return self._json(401, {"error": "unauthorized"})
+            return self._sse(qtok)
 
         if path == "/api/register" and method == "POST":
             body = self._body_json()
@@ -476,9 +593,39 @@ class Handler(BaseHTTPRequestHandler):
             HUB.log("已配对：%s" % ((body.get("deviceName") or "device")[:30]))
             return self._json(200, {"token": tk})
 
-        if path.startswith("/api/"):
-            if not HUB.check_token(self._token()):
+        if path == "/api/version":
+            # 电脑端界面（localhost）查版本不需要令牌
+            if not (self._is_local() or HUB.check_token(self._token())):
                 return self._json(401, {"error": "unauthorized"})
+            return self._json(200, {
+                "version": APP_VERSION,
+                "app": APP_TAG,
+                "repo": APP_REPO,
+                "platform": "desktop",
+            })
+
+        if path.startswith("/api/"):
+            # 本机（127.0.0.1）免令牌：能连到本机端口就说明已经在本机了，
+            # 而电脑端自己的界面就是由这个端口托管的，它必须能读写同一份数据，
+            # 否则电脑上的对话永远进不了同步。
+            if not (self._is_local() or HUB.check_token(self._token())):
+                return self._json(401, {"error": "unauthorized"})
+
+            if path == "/api/version":
+                return self._json(200, {
+                    "version": APP_VERSION,
+                    "app": APP_TAG,
+                    "repo": APP_REPO,
+                    "platform": "desktop",
+                })
+
+            # 客户端告诉中枢「我这边改了东西」→ 广播给其他端，它们自己去拉
+            if path == "/api/touch" and method == "POST":
+                body = self._body_json()
+                HUB.broadcast("changed", {"from": body.get("device") or "device",
+                                          "at": int(time.time() * 1000)},
+                              origin_token=self._token())
+                return self._json(200, {"ok": True, "listeners": HUB.sse_count()})
 
             if path == "/api/info":
                 return self._json(200, {"name": APP_NAME + " · 电脑端", "version": 1,
@@ -524,6 +671,10 @@ class Handler(BaseHTTPRequestHandler):
                 merged = merge_state(local, incoming)
                 save_json(STATE_FILE, merged)
                 HUB.log("同步完成：%d 条对话" % len(merged["conversations"]))
+                # 实时推送：把这次变更告诉其他端（发起方自己不用收，它已经拿到结果）
+                HUB.broadcast("changed", {"from": str(incoming.get("device") or "device"),
+                                          "at": int(time.time() * 1000)},
+                              origin_token=self._token())
                 return self._json(200, {"conversations": merged["conversations"],
                                         "tombstones": merged["tombstones"],
                                         "skills": merged["skills"], "skillsAt": merged["skillsAt"],
@@ -543,7 +694,6 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, {"files": items[:200]})
 
             if path == "/api/files" and method == "POST":
-                from urllib.parse import unquote
                 raw_name = unquote(self.headers.get("x-filename") or "file")
                 safe = os.path.basename(raw_name)
                 for ch in '\\/:*?"<>|':
@@ -563,7 +713,6 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, {"name": name, "size": len(data)})
 
             if path.startswith("/api/files/"):
-                from urllib.parse import unquote, quote
                 name = os.path.basename(unquote(path[len("/api/files/"):]))
                 fp = os.path.join(FILE_DIR, name)
                 if method == "DELETE":
@@ -692,8 +841,28 @@ class Discovery(threading.Thread):
 
 # ---------------------------------------------------------------- 启停
 
+def _port_in_use(p):
+    """有人在这个端口监听吗。
+
+    不能只看自己能不能 bind：Windows 下别人只绑 127.0.0.1:8787 时，
+    我们绑 0.0.0.0:8787 依然会成功，但客户端连 127.0.0.1 就打到别人那里去了。
+    （实测：python -m http.server 占着 8787，find_free_port 仍返回 8787）"""
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(0.3)
+    try:
+        return s.connect_ex(("127.0.0.1", p)) == 0
+    except Exception:
+        return False
+    finally:
+        s.close()
+
+
 def find_free_port(start=DEFAULT_PORT, tries=20):
+    """找一个真能用的端口。全被占时返回 None（以前是直接返回 start，
+    结果去 bind 一个已占用的端口，进程直接崩，用户什么提示也看不到）。"""
     for p in range(start, start + tries):
+        if _port_in_use(p):
+            continue
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
             s.bind(("0.0.0.0", p))
@@ -702,15 +871,24 @@ def find_free_port(start=DEFAULT_PORT, tries=20):
             continue
         finally:
             s.close()
-    return start
+    return None
 
 
 def already_running(port):
+    """已经在跑时返回它的版本号；没跑或端口上是别的程序时返回 None。
+
+    以前只判 HTTP 200，于是 8787 被别的软件占用时会把对方当成自己，
+    弹出来的窗口里是别人的页面。现在必须真的回 app=keyapp 才算。"""
     try:
-        with urllib.request.urlopen("http://127.0.0.1:%d/api/code" % port, timeout=1.2) as r:
-            return r.status == 200
+        with urllib.request.urlopen("http://127.0.0.1:%d/api/ping" % port, timeout=1.5) as r:
+            if r.status != 200:
+                return None
+            info = json.loads(r.read().decode("utf-8") or "{}")
+            if not isinstance(info, dict) or info.get("app") != APP_TAG:
+                return None
+            return str(info.get("version") or "")
     except Exception:
-        return False
+        return None
 
 
 def start_server(port, assets, www_dir):
@@ -746,9 +924,48 @@ WINDOW_TITLE_HINT = "钥匙"
 WEBVIEW_STATE = {"checked": False, "ok": False, "why": ""}
 
 
+def write_update_script(script_path, target, new_exe, old_path):
+    """生成「等进程退出 → 改名旧版 → 放新版 → 启动」的 cmd 脚本。
+
+    抽成独立函数是为了能单独测：直接跑这段 cmd 验证替换是否真的成功，
+    不用真的下载一遍。
+
+    为什么要重试：刚 os._exit 时 Windows 可能还没释放弃文件句柄，
+    move 会失败。不能一次就放弃，否则用户点了更新什么都没发生。
+    """
+    lines = [
+        "@echo off",
+        "chcp 936 >nul",
+        "timeout /t 2 /nobreak >nul",
+        "set n=0",
+        ":retry",
+        'move /y "%s" "%s" >nul 2>&1' % (target, old_path),
+        "if errorlevel 1 (",
+        "  set /a n+=1",
+        "  if %n% GEQ 20 goto fail",
+        "  timeout /t 1 /nobreak >nul",
+        "  goto retry",
+        ")",
+        'move /y "%s" "%s" >nul 2>&1' % (new_exe, target),
+        "if errorlevel 1 goto restore",
+        'del "%s" >nul 2>&1' % old_path,
+        'start "" "%s"' % target,
+        "exit /b 0",
+        ":restore",
+        'move /y "%s" "%s" >nul 2>&1' % (old_path, target),
+        ":fail",
+        'start "" "%s"' % target,
+        "exit /b 1",
+    ]
+    with io.open(script_path, "w", encoding="gbk", newline="\r\n") as f:
+        f.write("\r\n".join(lines))
+    return script_path
+
+
 class _Bridge:
-    """暴露给页面的极小接口。目前只有一个用途：
-    回答里的外链点开时丢给系统默认浏览器，别把整个应用导航走。"""
+    """暴露给页面的极小接口。
+    open_external — 外链丢给系统浏览器，别把整个应用导航走
+    self_update   — 下载新版 exe 并自己换上去（无需手动下载）"""
 
     def open_external(self, url):
         try:
@@ -758,6 +975,88 @@ class _Bridge:
         except Exception:
             pass
         return False
+
+    def app_version(self):
+        return APP_VERSION
+
+    def self_update(self, url):
+        """下载并安装新版。返回 {ok, error}。
+
+        Windows 不允许覆盖正在运行的 exe，但**允许改名**，所以：
+          1. 下到 keyapp-data/update/钥匙-new.exe
+          2. 启一个分离的 cmd：等我们退出 → 改名旧 exe → 放新的 → 启动
+          3. 本进程直接 _exit
+        中途任何一步失败都把临时文件删干净，原 exe 不动。"""
+        try:
+            return self._self_update(url)
+        except Exception as e:
+            HUB.log("自动更新失败：%s" % e)
+            return {"ok": False, "error": str(e)}
+
+    def _self_update(self, url):
+        if not isinstance(url, str) or not url.lower().startswith("https://"):
+            return {"ok": False, "error": "bad-url"}
+        if not getattr(sys, "frozen", False):
+            # 开发模式（直接跑 .py）没有可替换的 exe，只开链接
+            webbrowser.open(url)
+            return {"ok": False, "error": "dev-mode"}
+
+        target = os.path.abspath(sys.executable)
+        if not target.lower().endswith(".exe"):
+            return {"ok": False, "error": "not-exe"}
+
+        upd_dir = os.path.join(DATA_DIR, "update")
+        os.makedirs(upd_dir, exist_ok=True)
+        tmp = os.path.join(upd_dir, "new.exe")
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except Exception:
+                pass
+
+        HUB.log("正在下载新版本…")
+        req = urllib.request.Request(url, headers={
+            "user-agent": "keyapp-updater/1",
+            "accept": "application/octet-stream",
+        })
+        with urllib.request.urlopen(req, timeout=60) as r, open(tmp, "wb") as f:
+            total = 0
+            while True:
+                chunk = r.read(262144)
+                if not chunk:
+                    break
+                f.write(chunk)
+                total += len(chunk)
+                if total > 400 * 1024 * 1024:
+                    raise IOError("文件太大，放弃")
+
+        size = os.path.getsize(tmp)
+        if size < 3 * 1024 * 1024:
+            os.remove(tmp)
+            return {"ok": False, "error": "下载的内容不是 exe（%d 字节）" % size}
+        with open(tmp, "rb") as f:
+            if f.read(2) != b"MZ":
+                os.remove(tmp)
+                return {"ok": False, "error": "下载的内容不是有效的 exe"}
+
+        old = target + ".old.exe"
+        script = write_update_script(
+            os.path.join(upd_dir, "apply.cmd"), target, tmp, old)
+
+        HUB.log("下载完成（%.1f MB），正在替换并重启" % (size / 1048576.0))
+        subprocess.Popen(
+            ["cmd.exe", "/c", script],
+            creationflags=0x00000008 | 0x00000200,   # DETACHED_PROCESS | NEW_PROCESS_GROUP
+            close_fds=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        def _bye():
+            time.sleep(1.0)
+            os._exit(0)
+        threading.Thread(target=_bye, daemon=True).start()
+        return {"ok": True, "size": size}
 
 
 # 页内装一层外链兵，只拦 http(s)/mailto，站内跳转不管。
@@ -1035,8 +1334,22 @@ def show_window(url):
 
 # ---------------------------------------------------------------- 入口
 
+def err_box(title, message):
+    """弹一个错误框。没 tkinter 也不崩。"""
+    try:
+        import tkinter as tk
+        from tkinter import messagebox
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror(title, message)
+        root.destroy()
+    except Exception:
+        HUB.log(title + ": " + message.replace("\n", " "))
+
+
 def main():
     ensure_dirs()
+    _dev_version()
     HUB.load_tokens()
 
     # 已经有服务在跑：把窗口带出来就行，不起第二个
@@ -1073,6 +1386,13 @@ def main():
         return
 
     port = find_free_port(DEFAULT_PORT)
+    if port is None:
+        err_box("端口都被占用了",
+                "%d 到 %d 都被其他程序占用，服务起不来。\n\n"
+                "常因：上一份钥匙还在跑（去任务管理器结束「钥匙.exe」），\n"
+                "或其他软件占着这些端口。\n\n"
+                "关掉占用后再双击一次。" % (DEFAULT_PORT, DEFAULT_PORT + 19))
+        return
     srv = start_server(port, assets, www_dir)
     disc = Discovery(port)
     disc.start()

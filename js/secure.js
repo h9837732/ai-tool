@@ -91,9 +91,72 @@
     };
   })();
 
+  /* ---------- 局域网探测（原生） ----------
+     扫描必须走原生：App 的 origin 是 https://localhost，
+     从它 fetch http://192.168.x.x 是混合内容，WebView 会拦掉。 */
+
+  var NetInfo = (function () {
+    var net = plugin('NetInfo');
+
+    return {
+      isNative: native,
+      hasPlugin: function () { return !!net; },
+
+      /* 本机所有 IPv4。取不到返回 []（调用方会退回常见网段） */
+      localIps: function () {
+        if (!net) return Promise.resolve([]);
+        return Promise.resolve(net.localIps())
+          .then(function (r) { return (r && r.ips) || []; })
+          .catch(function () { return []; });
+      },
+
+      /* 扫一批 ip，返回 [{ip, port, alias, url}]。无插件时返回 null */
+      scan: function (ips, opts) {
+        if (!net) return Promise.resolve(null);
+        opts = opts || {};
+        return Promise.resolve(net.scan({
+          ips: ips || [],
+          port: opts.port || 8787,
+          timeoutMs: opts.timeoutMs || 400,
+          concurrency: opts.concurrency || 64
+        })).then(function (r) {
+          return (r && r.found) || [];
+        }).catch(function () { return null; });
+      }
+    };
+  })();
+
+  /* ---------- 应用内更新（原生） ----------
+     WebView 下不了 apk、也装不了，必须走原生：
+     下载到 cache/updates → FileProvider 发个 content:// → 拉起系统安装器。 */
+
+  var ApkUpdater = (function () {
+    var up = plugin('ApkUpdater');
+
+    return {
+      isNative: native,
+      hasPlugin: function () { return !!up; },
+      info: function () {
+        if (!up) return Promise.resolve(null);
+        return Promise.resolve(up.info()).catch(function () { return null; });
+      },
+      install: function (url) {
+        if (!up) return Promise.resolve({ ok: false, error: 'noplugin' });
+        return Promise.resolve(up.install({ url: url }))
+          .then(function (r) {
+            if (!r) return { ok: false, error: 'failed' };
+            return { ok: !!r.ok, error: r.error || '' };
+          })
+          .catch(function (e) { return { ok: false, error: (e && e.message) || 'failed' }; });
+      }
+    };
+  })();
+
   global.Native = {
     isNative: native,
     SecureStore: SecureStore,
-    NativeHttp: NativeHttp
+    NativeHttp: NativeHttp,
+    NetInfo: NetInfo,
+    ApkUpdater: ApkUpdater
   };
 })(window);

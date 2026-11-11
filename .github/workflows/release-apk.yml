@@ -158,3 +158,48 @@ jobs:
             - 密钥用系统钥匙串加密存储
             - 支持中英文界面
             - 智谱、混元等不返回跨域头的服务商已可在 App 内使用
+
+  # 电脑端 exe。必须挂在同一个 Release 下，应用内更新才找得到。
+  windows:
+    runs-on: windows-latest
+    steps:
+      - name: 取代码
+        uses: actions/checkout@v5
+
+      - name: 装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 装 Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: 装依赖
+        run: |
+          bun install --frozen-lockfile || bun install
+          python -m pip install --upgrade pip
+          python -m pip install pywebview pyinstaller pythonnet clr-loader
+
+      - name: 构建前端 + 内嵌资源 + 打包
+        shell: bash
+        run: |
+          bun run build
+          python desktop/embed_assets.py
+          python desktop/build_exe.py
+
+      - name: 校验版本号
+        shell: bash
+        run: |
+          V=$(python -c "import json;print(json.load(open('package.json'))['version'])")
+          echo "package.json = $V / tag = ${GITHUB_REF_NAME}"
+          if [ "v$V" != "${GITHUB_REF_NAME}" ]; then
+            echo "::warning::tag 与 package.json 版本不一致，请先改 package.json"
+          fi
+
+      - name: 挂到 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: desktop/dist/钥匙.exe
+          generate_release_notes: true

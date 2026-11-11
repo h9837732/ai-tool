@@ -63,9 +63,29 @@
     try { localStorage.setItem(K_SKIP, String(version || '')); } catch (e) { /* 忽略 */ }
   }
 
+  function platform() {
+    if (global.pywebview && global.pywebview.api && global.pywebview.api.self_update) return 'desktop';
+    if (global.Capacitor && global.Capacitor.isNativePlatform && global.Capacitor.isNativePlatform()) return 'android';
+    return 'web';
+  }
+
+  /* 从 release 的 asset 列表里挑适合当前平台的那个。
+     一个 release 会同时挂 钥匙.exe 和 keyapp.apk，
+     以前直接取 assets[0]，电脑端会下到 APK。 */
+  function pickAsset(assets) {
+    var list = assets || [];
+    var want = platform() === 'android' ? /\.apk$/i : /\.(exe|msi|zip)$/i;
+    for (var i = 0; i < list.length; i++) {
+      var n = String((list[i] && list[i].name) || '');
+      if (want.test(n) && list[i].browser_download_url) return list[i];
+    }
+    /* 没对上就取第一个：至少还能手动下 */
+    return list[0] || {};
+  }
+
   function parseGithub(j) {
     if (!j || !j.tag_name) return null;
-    var asset = (j.assets || [])[0] || {};
+    var asset = pickAsset(j.assets);
     return {
       version: String(j.tag_name).replace(/^v/i, ''),
       url: asset.browser_download_url || j.html_url || '',
@@ -167,11 +187,44 @@
     }
   }
 
+  /* 就地在应用内更新。返回 Promise<{ok, mode, error}> */
+  function install(url) {
+    if (!url) return Promise.resolve({ ok: false, error: 'nourl' });
+    var p = platform();
+
+    /* 电脑端：交给 Python 下载并替换 exe，进程会重启 */
+    if (p === 'desktop') {
+      return Promise.resolve(global.pywebview.api.self_update(url))
+        .then(function (r) {
+          if (r && r.ok) return { ok: true, mode: 'desktop' };
+          if (r && r.error === 'dev-mode') return { ok: false, error: 'dev-mode' };
+          return { ok: false, error: (r && r.error) || 'failed' };
+        })
+        .catch(function (e) { return { ok: false, error: (e && e.message) || 'failed' }; });
+    }
+
+    /* 手机端：原生下载 APK 再弹系统安装 */
+    if (p === 'android' && global.Native && global.Native.ApkUpdater && global.Native.ApkUpdater.hasPlugin()) {
+      return Promise.resolve(global.Native.ApkUpdater.install(url))
+        .then(function (r) {
+          if (r && r.ok) return { ok: true, mode: 'android' };
+          return { ok: false, error: (r && r.error) || 'failed' };
+        })
+        .catch(function (e) { return { ok: false, error: (e && e.message) || 'failed' }; });
+    }
+
+    /* 其余（浏览器网页版）：只能开下载页 */
+    open(url);
+    return Promise.resolve({ ok: false, mode: 'manual', error: 'manual' });
+  }
+
   global.Update = {
     current: current,
     compare: compare,
     check: check,
     open: open,
+    install: install,
+    platform: platform,
     skip: skip,
     skippedVersion: skippedVersion,
     customEndpoint: customEndpoint,

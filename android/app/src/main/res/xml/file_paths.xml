@@ -2,4 +2,6 @@
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
     <external-path name="my_images" path="." />
     <cache-path name="my_cache_images" path="." />
+    <!-- 应用内更新下载的 apk 存在 cache/updates，要靠这个暴露给安装器 -->
+    <cache-path name="updates" path="updates/" />
 </paths>

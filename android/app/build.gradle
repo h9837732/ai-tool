@@ -9,6 +9,34 @@ if (keystorePropsFile.exists()) {
 }
 def hasStableKey = keystorePropsFile.exists() && keystoreProps['storeFile']
 
+/* 版本号只有一个来源：仓库根目录的 package.json。
+   以前这里是写死的 versionCode 10 / versionName "1.3.4"，
+   网页已经 1.3.6 了，APK 还是 1.3.4 —— 同版本号装新包，
+   安卓直接报「应用未安装」。
+
+   优先级：-PappVersionName/-PappVersionCode（CI 从 tag 传）
+           > package.json
+   versionCode 用 major*10000 + minor*100 + patch，单调递增。 */
+def pkgVersion = "1.0.0"
+try {
+    def pkgFile = rootProject.file('../package.json')
+    if (pkgFile.exists()) {
+        def parsed = new groovy.json.JsonSlurper().parse(pkgFile)
+        if (parsed.version) pkgVersion = parsed.version.toString()
+    }
+} catch (Exception e) {
+    logger.warn("读取 package.json 版本失败，回退 ${pkgVersion}: ${e.message}")
+}
+
+def versionParts = pkgVersion.replaceAll(/^v/i, '').tokenize('.')
+def vMajor = versionParts.size() > 0 ? versionParts[0].toInteger() : 1
+def vMinor = versionParts.size() > 1 ? versionParts[1].toInteger() : 0
+def vPatch = versionParts.size() > 2 ? versionParts[2].toInteger() : 0
+def derivedCode = vMajor * 10000 + vMinor * 100 + vPatch
+
+def appVersionName = project.hasProperty('appVersionName') ? project.property('appVersionName').toString() : pkgVersion.replaceAll(/^v/i, '')
+def appVersionCode = project.hasProperty('appVersionCode') ? project.property('appVersionCode').toString().toInteger() : derivedCode
+
 android {
     namespace = "com.keyapp.chat"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -16,8 +44,8 @@ android {
         applicationId "com.keyapp.chat"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 10
-        versionName "1.3.4"
+        versionCode appVersionCode
+        versionName appVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.

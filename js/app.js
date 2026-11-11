@@ -2461,6 +2461,7 @@
   /* ---------- 手机端：扫描 + 配对 ---------- */
 
   function renderClientSide() {
+    if (!el.clientBadge) return;
     var on = Sync.isConnected();
     var c = Sync.connection();
 
@@ -2512,28 +2513,33 @@
 
   async function runScan() {
     if (scanState.running) return;
-    var prefixes = Sync.lanPrefixes();
-    if (!prefixes.length) {
-      /* App 里不知道网段：把常见家用网段都试一遍 */
-      prefixes = ['192.168.1', '192.168.0', '192.168.2', '192.168.31', '10.0.0'];
-    }
+
+    var own = await Sync.lanPrefixes();
     scanState = { running: true, done: 0, total: 0, found: [] };
     el.scanWrap.hidden = false;
     renderClientSide();
 
-    var found = await Sync.scanLan({
-      prefixes: prefixes,
-      port: 8787,
-      concurrency: 48,
-      timeoutMs: 700,
-      onProgress: function (done, total, hits) {
-        scanState.done = done;
-        scanState.total = total;
-        scanState.found = hits.slice();
-        el.scanStatus.textContent = t('link.scanningCount', { done: done, total: total });
-        if (hits.length) renderScanList();
+    function progress(done, total, hits) {
+      scanState.done = done;
+      scanState.total = total;
+      scanState.found = hits.slice();
+      el.scanStatus.textContent = t('link.scanningCount', { done: done, total: total });
+      if (hits.length) renderScanList();
+    }
+
+    /* 第一步：先扫自己真所在的网段（拿得到就只扫这一段，快） */
+    var found = own.length
+      ? await Sync.scanLan({ prefixes: own, port: 8787, concurrency: 96, timeoutMs: 400, onProgress: progress })
+      : [];
+
+    /* 第二步：一段都没招到，再扫常见家用网段
+       （路由器开了多网段、或手机走 4G 热点旁路由时会碰上） */
+    if (!found.length) {
+      var fallback = Sync.COMMON_PREFIXES.filter(function (p) { return own.indexOf(p) < 0; });
+      if (fallback.length) {
+        found = await Sync.scanLan({ prefixes: fallback, port: 8787, concurrency: 96, timeoutMs: 350, onProgress: progress });
       }
-    });
+    }
 
     scanState.running = false;
     scanState.found = found;
@@ -3631,11 +3637,32 @@
       if (e.key === 'Enter') { e.preventDefault(); el.btnModelUse.click(); }
     });
 
-    /* 更新 */
+    /* 更新：能在应用内装就直接装，装不了才开下载页 */
     el.updateGo.addEventListener('click', function () {
       if (!updateState.url) return;
-      toast(t('update.opening'), 2500);
-      Update.open(updateState.url);
+      var btn = el.updateGo;
+      btn.disabled = true;
+      btn.textContent = t('update.installing');
+      toast(t('update.installing'), 4000);
+      Update.install(updateState.url).then(function (r) {
+        btn.disabled = false;
+        btn.textContent = t('update.install');
+        if (r && r.ok) {
+          toast(r.mode === 'android' ? t('update.apkNote') : t('update.installDone'), 6000);
+          return;
+        }
+        if (r && r.mode === 'manual') {
+          toast(t('update.needManual'), 5000);
+          return;
+        }
+        /* 电脑端开发模式 / 下载失败：退回开下载页 */
+        toast(t('update.installFail', { msg: (r && r.error) || 'failed' }), 6000);
+        Update.open(updateState.url);
+      }).catch(function (e) {
+        btn.disabled = false;
+        btn.textContent = t('update.install');
+        toast(t('update.installFail', { msg: (e && e.message) || 'failed' }), 6000);
+      });
     });
     el.updateClose.addEventListener('click', function () {
       hideUpdateBar();
@@ -3919,17 +3946,42 @@
       });
     }
 
-    /* 已配对的话，启动后静默同步一次 */
-    if (Sync.isConnected()) {
-      setTimeout(function () {
-        Sync.syncNow().then(function (r) {
-          if (r && r.ok) {
-            state.index = Store.loadIndex();
-            renderConvList();
-          }
-        });
-      }, 2500);
-    }
+    /* 已配对（或本页就是服务本机）时，启动后静默同步一次，
+       并挂上实时推送：另一台设备改了东西会自动拉回来 */
+    Sync.onChanged(function (info) {
+      state.index = Store.loadIndex();
+      renderConvList();
+      renderHint();
+      if (el.linkBadge) renderLinkPane();
+      /* 当前开着的对话如果被另一台设备改过，直接把新内容画出来。
+         这里直接换 state.conv 而不用 openConv，因为 openConv 会 persistNow，
+         又会 saveConv 又触发 touch，两端会来回嗡嗡。 */
+      if (state.conv) {
+        var fresh = Store.loadConv(state.conv.id);
+        if (fresh && !fresh.temp && (fresh.updatedAt || 0) > (state.conv.updatedAt || 0)) {
+          state.conv = fresh;
+          if (!Array.isArray(fresh.messages)) fresh.messages = [];
+          renderStream();
+          renderTitle();
+          renderBarState();
+          renderConvList();
+        }
+      }
+      if (info && (info.pulled || info.deleted)) {
+        toast(t('link.realtimePulled', { pulled: info.pulled || 0 }), 2500);
+      }
+    });
+
+    /* 不再先判断 isConnected：电脑端自己的界面就是服务本机，
+       没有配对令牌但同样要参与同步。syncNow 内部会自己分清。 */
+    setTimeout(function () {
+      Sync.syncNow().then(function (r) {
+        if (r && r.ok) {
+          state.index = Store.loadIndex();
+          renderConvList();
+        }
+      }).catch(function () {});
+    }, 2500);
 
     /* 时段每分钟刷一次，页面一直开着也能看到高峰/空闲切换 */
     setInterval(function () {

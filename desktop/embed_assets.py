@@ -13,7 +13,9 @@
 
 import base64
 import io
+import json
 import os
+import re
 import sys
 import zipfile
 
@@ -57,10 +59,43 @@ def collect(root):
     return items
 
 
+def read_version():
+    """package.json 是全项目唯一的版本来源。"""
+    p = os.path.join(PROJECT, "package.json")
+    try:
+        with io.open(p, "r", encoding="utf-8") as f:
+            return str(json.load(f).get("version") or "")
+    except Exception:
+        return ""
+
+
+def version_js_of(root):
+    p = os.path.join(root, "js", "version.js")
+    try:
+        with io.open(p, "r", encoding="utf-8") as f:
+            m = re.search(r"APP_VERSION\s*=\s*'([^']*)'", f.read())
+            return m.group(1) if m else ""
+    except Exception:
+        return ""
+
+
 def main():
     root = pick_root()
     if not root:
         print("!! 找不到前端文件（需要 index.html 和 js/app.js）")
+        return 1
+
+    # 版本一致性闸门：package.json 改了但没重跑 bun run build 时，
+    # 打进 exe 的版本号会是旧的，界面就一直提示「发现新版本」。
+    want = read_version()
+    got = version_js_of(root)
+    if not want:
+        print("!! 读不到 package.json 的 version")
+        return 1
+    if got != want:
+        print("!! 版本号不一致，先跑 bun run build")
+        print("   package.json        %s" % want)
+        print("   %s/js/version.js   %s" % (root, got or "(缺失)"))
         return 1
 
     items = collect(root)
@@ -89,11 +124,20 @@ def main():
     replacement = "ASSETS_B64 = (\n%s\n)" % wrapped
     code = code.replace(marker, replacement, 1)
 
+    # 把真实版本号写进 Python 侧，/api/version 和 /api/ping 都靠它
+    old_ver = 'APP_VERSION = "0.0.0-dev"'
+    if old_ver in code:
+        code = code.replace(old_ver, 'APP_VERSION = "%s"' % want, 1)
+    else:
+        print("!! keyapp_desktop.py 里找不到 APP_VERSION 占位")
+        return 1
+
     out_py = os.path.join(HERE, "钥匙-打包用.py")
     with io.open(out_py, "w", encoding="utf-8", newline="\n") as f:
         f.write(code)
 
     print("源目录   : %s" % root)
+    print("版本     : %s" % want)
     print("文件数   : %d" % len(items))
     print("压缩后   : %.1f KB" % (len(raw.getvalue()) / 1024.0))
     print("base64   : %.1f KB" % (len(blob) / 1024.0))
