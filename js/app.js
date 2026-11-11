@@ -381,7 +381,7 @@
         toast(t('toast.storageFull'), 5000);
         return;
       }
-      state.secureOn = !!r.secure;
+      state.secureOn = !!r.secure || Store.isSecureAvailable();
       renderSecureNote();
     }).catch(function () { /* 已在 Store 内兜底 */ });
   }
@@ -2924,11 +2924,12 @@
 
   /* ---------- 更新检查 ---------- */
 
-  var updateState = { latest: '', url: '', notes: '' };
+  var updateState = { latest: '', url: '', notes: '', digest: '' };
 
   function showUpdateBar(info) {
     updateState.latest = info.latest || '';
     updateState.url = info.url || '';
+    updateState.digest = info.digest || '';
     el.updateBar.hidden = false;
     el.updateText.textContent = t('update.available', { v: updateState.latest });
   }
@@ -3644,7 +3645,7 @@
       btn.disabled = true;
       btn.textContent = t('update.installing');
       toast(t('update.installing'), 4000);
-      Update.install(updateState.url).then(function (r) {
+      Update.install(updateState.url, updateState.digest).then(function (r) {
         btn.disabled = false;
         btn.textContent = t('update.install');
         if (r && r.ok) {
@@ -3927,18 +3928,34 @@
       syncH();
     }
 
-    /* 数据升级：只补不删；密钥加密成功才会删掉明文副本 */
-    Promise.resolve(Store.migrate()).then(function (r) {
-      if (!r) return;
-      state.profiles = Store.loadProfiles();
-      state.secureOn = Store.usesSecureProfiles() || (typeof Native !== 'undefined' && Native.SecureStore.isAvailable());
-      if (r.done.indexOf('encrypted-keys') >= 0) toast(t('toast.secureMigrated'), 4000);
-      renderProfileList();
-      renderHint();
-      renderSecureNote();
-    }).catch(function () { /* 迁移失败就维持原样，不动数据 */ });
+    /* 密钥：先把安全存储里的内容读进内存，再做迁移。
+       顺序很重要 —— hydrate 是唯一会把历史明文搬进安全存储的时机。
+       电脑端的 pywebview 桥是页面加载完才注入的，第一次可能还拿不到，
+       所以没成功就隔一会儿再试一次（不然会一直走明文）。 */
+    function bootSecure(attempt) {
+      attempt = attempt || 0;
+      return Promise.resolve(Store.hydrate()).then(function (secured) {
+        if (secured) state.secureOn = true;
+        return Store.migrate();
+      }).then(function (r) {
+        if (!r) return;
+        state.profiles = Store.loadProfiles();
+        state.secureOn = Store.usesSecureProfiles() || Store.isSecureAvailable();
+        if (r.done.indexOf('encrypted-keys') >= 0) toast(t('toast.secureMigrated'), 4000);
+        renderProfileList();
+        renderHint();
+        renderSecureNote();
+        /* 未加密且还有尝试机会 → 稍后重试（桥可能刚注入） */
+        if (!state.secureOn && attempt < 3) {
+          setTimeout(function () { bootSecure(attempt + 1); }, 1200);
+        }
+      });
+    }
 
-    /* 加密存储可用性（只用于界面提示） */
+    bootSecure(0).catch(function () { /* 迁移失败就维持原样，不动数据 */ });
+
+    /* 加密存储可用性（只用于界面提示）。
+       电脑端（DPAPI）也是这里拿到结果。 */
     if (typeof Native !== 'undefined' && Native.SecureStore.isNative) {
       Promise.resolve(Native.SecureStore.check()).then(function (avail) {
         state.secureOn = !!avail;

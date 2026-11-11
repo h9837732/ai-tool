@@ -34,3 +34,6 @@ desktop/dist/
 
 # UI 视觉验收产物（本地生成，别入库）
 .uiqa/
+
+# 自测临时目录
+.selftest-tmp/

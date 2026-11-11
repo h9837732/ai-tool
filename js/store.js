@@ -2,9 +2,10 @@
    优先 localStorage；浏览器禁用持久化（例如直接 file:// 打开时的隐私限制）时
    退回内存存储，并在界面上提示用户导出备份。所有数据都留在本机。
 
-   密钥条目（profiles）在打包成 App 后会额外走一遍系统钥匙串加密：
-   加密版本存 secure vault，明文副本从 localStorage 里删掉。
-   任何一步失败都保留明文副本，绝不丢数据。 */
+   密钥条目（profiles）走系统安全存储：
+   安卓 → Android Keystore；电脑端 → Windows DPAPI。
+   启用后 localStorage 里不保留任何明文，内存里只留一份缓存维持同步读取。
+   安全存储不可用（纯浏览器）时退回 localStorage 明文，并在界面上明说。 */
 
 const Store = (function () {
   const PREFIX = 'keyapp:';
@@ -19,8 +20,9 @@ const Store = (function () {
   const K_TOMB = PREFIX + 'tombstones';
   const K_SKILLS_AT = PREFIX + 'skillsAt';
 
-  /* 当前数据结构版本。加字段不用动它，只有改了存储形态才 +1。 */
-  const SCHEMA = 2;
+  /* 当前数据结构版本。加字段不用动它，只有改了存储形态才 +1。
+     v3：不再向 localStorage 写密钥（含旧的明文缓存 K_SECURE） */
+  const SCHEMA = 3;
 
   const memory = new Map();
   let persistent = false;
@@ -60,11 +62,24 @@ const Store = (function () {
     return Array.isArray(v) ? v : [];
   }
 
-  let secureReady = false;
+  let secureReady = false;      // 密钥确实已经加密存在安全区里
+  let secureCapable = false;    // 系统安全区可用（哪怕现在还没有密钥）
+  /* 安全存储解密后的密钥列表。loadProfiles 是同步接口（渲染要立即拿到），
+     所以只能在启动时 hydrate() 一次，之后走内存。 */
+  let secureMem = null;
+
+  function securePlugin() {
+    const S = (typeof Native !== 'undefined') ? Native.SecureStore : null;
+    return (S && S.isNative) ? S : null;
+  }
 
   return {
     isPersistent: function () { return persistent; },
     usesSecureProfiles: function () { return secureReady; },
+    /* 安全区能不能用。和 usesSecureProfiles 的区别：
+       刚装好、还没有任何密钥时，前者是 false，但加密能力是完全可用的。
+       界面文案要按“能力”说，不能因为还没有密钥就说自己在存明文。 */
+    isSecureAvailable: function () { return secureCapable; },
     schemaVersion: function () {
       const v = Number(readRaw(K_SCHEMA) || 0);
       return isNaN(v) ? 0 : v;
@@ -76,36 +91,74 @@ const Store = (function () {
     saveSettings: function (obj) { return writeRaw(K_SETTINGS, JSON.stringify(obj)); },
 
     /* ---- 密钥条目 ---- */
-    /* 同步读取：优先加密副本的本地缓存；没有就退回明文。 */
+    /* 同步读取：安全存储已经 hydrate 过就用内存那份，否则（纯浏览器）读明文。 */
     loadProfiles: function () {
-      const secured = readRaw(K_SECURE);
-      if (secured) {
-        try {
-          const arr = JSON.parse(secured);
-          if (Array.isArray(arr)) return arr;
-        } catch (e) { /* 落到明文 */ }
-      }
+      if (secureMem) return secureMem.slice();
       return readArray(K_PROFILES);
     },
 
-    /* 异步保存：App 里走钥匙串，浏览器里就是 localStorage。
+    /* 启动时把安全存储里的密钥读进内存，并清掉历史上留下的明文副本。
+       返回 Promise<boolean>：true 表示已启用安全存储。 */
+    hydrate: async function () {
+      const S = securePlugin();
+      if (!S) return false;
+      const avail = await S.check();
+      if (!avail) return false;
+      secureCapable = true;
+
+      const raw = await S.get('profiles');
+      let list = null;
+      if (raw) {
+        try {
+          const arr = JSON.parse(raw);
+          if (Array.isArray(arr)) list = arr;
+        } catch (e) { /* 解不开就当没有 */ }
+      }
+
+      if (!list) {
+        /* 安全存储里没有：把明文搬进去。这是唯一会读明文的时机。 */
+        const plain = readArray(K_PROFILES);
+        if (plain.length) {
+          const ok = await S.set('profiles', JSON.stringify(plain));
+          if (ok) list = plain;
+        }
+      }
+
+      if (list) {
+        secureMem = list;
+        secureReady = true;
+        /* 明文不再需要：包括老版本留下的 K_SECURE 缓存 */
+        removeRaw(K_PROFILES);
+        removeRaw(K_SECURE);
+        return true;
+      }
+      return false;
+    },
+
+    /* 异步保存：有安全存储就走它，没有就退回 localStorage。
        返回 Promise<{ ok, secure }>。 */
     saveProfiles: async function (list) {
       const json = JSON.stringify(list);
-      const plainOk = writeRaw(K_PROFILES, json);
+      const S = securePlugin();
 
-      const S = (typeof Native !== 'undefined') ? Native.SecureStore : null;
-      if (S && S.isNative) {
+      if (S) {
         const avail = await S.check();
         if (avail) {
           const ok = await S.set('profiles', json);
           if (ok) {
+            secureMem = list.slice();
             secureReady = true;
-            writeRaw(K_SECURE, json);   // 本地缓存，供下次同步读取
+            secureCapable = true;
+            /* 关键：不再写任何明文副本 */
+            removeRaw(K_PROFILES);
+            removeRaw(K_SECURE);
             return { ok: true, secure: true };
           }
         }
       }
+
+      /* 没有安全存储（纯浏览器）：只能明文存在 localStorage，界面上会提示 */
+      const plainOk = writeRaw(K_PROFILES, json);
       return { ok: plainOk, secure: false };
     },
 
@@ -175,20 +228,52 @@ const Store = (function () {
         }
       }
 
-      /* v2：密钥挪进系统钥匙串加密 */
+      /* v2：密钥挪进系统安全存储（安卓 Keystore / 电脑 DPAPI） */
       if (from < 2) {
-        const S = (typeof Native !== 'undefined') ? Native.SecureStore : null;
-        const plain = readArray(K_PROFILES);
-        if (S && S.isNative && plain.length) {
+        const S = securePlugin();
+        const plain = secureMem || readArray(K_PROFILES);
+        if (S && plain.length) {
           const avail = await S.check();
           if (avail) {
             const ok = await S.set('profiles', JSON.stringify(plain));
             if (ok) {
+              secureMem = plain.slice();
               secureReady = true;
-              writeRaw(K_SECURE, JSON.stringify(plain));
-              removeRaw(K_PROFILES);       // 明文副本已经不必要
+              removeRaw(K_PROFILES);
               done.push('encrypted-keys');
             }
+          }
+        }
+      }
+
+      /* v3：清掉老版本留下的明文缓存 keyapp:secureProfiles。
+         以前为了「同步读取」把密钥明文又写了一份到 localStorage，
+         等于加密白做了。现在用内存缓存代替，这里把历史痕迹删干净。 */
+      if (from < 3) {
+        const S = securePlugin();
+        const left = readRaw(K_SECURE);
+        if (left) {
+          let moved = secureReady;
+          if (!moved && S) {
+            const avail = await S.check();
+            if (avail) {
+              try {
+                const arr = JSON.parse(left);
+                if (Array.isArray(arr) && arr.length) {
+                  moved = await S.set('profiles', JSON.stringify(arr));
+                  if (moved) {
+                    secureMem = arr;
+                    secureReady = true;
+                  }
+                } else {
+                  moved = true;       // 空数组，直接删就行
+                }
+              } catch (e) { /* 解不开就保留，不丢数据 */ }
+            }
+          }
+          if (moved) {
+            removeRaw(K_SECURE);
+            done.push('purged-plain-cache');
           }
         }
       }

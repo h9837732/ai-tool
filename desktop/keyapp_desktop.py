@@ -22,6 +22,8 @@ WebView2 运行时是 Windows 10/11 系统自带的，和 Edge 浏览器本体�
 """
 
 import base64
+import binascii
+import hashlib
 import io
 import json
 import os
@@ -65,6 +67,34 @@ DISCOVERY_PORT = 53317
 DEFAULT_PORT = 8787
 APP_TAG = "keyapp"
 
+# 本机免令牌开关（自测会把此设为 False 来验证令牌校验真的生效）
+LOCAL_FREE = True
+
+# ---------- 限额 ----------
+MAX_JSON = 2 * 1024 * 1024        # 同步用的 JSON
+MAX_FILE = 64 * 1024 * 1024       # 文件传输
+
+# ---------- 配对码限速 ----------
+# 6 位数字只有 100 万种，不限速的话局域网里跑一会儿就试出来了。
+PAIR_MAX_FAILS = 5
+# 锁定时长。可用环境变量覆盖（自测设短一点，不然两分钟内不能重跑）
+try:
+    PAIR_WINDOW_MS = int(os.environ.get("KEYAPP_PAIR_LOCK_MS") or 0) or 10 * 60 * 1000
+except ValueError:
+    PAIR_WINDOW_MS = 10 * 60 * 1000
+
+
+# 自动更新只接受 https。自测需要一个本地 HTTP 服务，用这个开关放开（仅测试用）。
+UPDATE_ALLOW_HTTP = False
+
+
+class TooLarge(Exception):
+    """请求体超过上限。"""
+
+    def __init__(self, size):
+        Exception.__init__(self, "too-large: %s" % size)
+        self.size = size
+
 # 内嵌的前端资源（zip + base64），由 embed_assets.py 生成
 ASSETS_B64 = ""
 
@@ -94,6 +124,18 @@ TOKENS_FILE = os.path.join(DATA_DIR, "tokens.json")
 PROFILE_DIR = os.path.join(DATA_DIR, "window-profile")
 # 内嵌 WebView2 的 localStorage / IndexedDB 落在这个目录，换 exe 也不丢
 WEBVIEW_STORAGE = os.path.join(DATA_DIR, "webview")
+# 密钥密文（DPAPI）
+SECRETS_FILE = os.path.join(DATA_DIR, "secrets.dat")
+
+
+def _make_secure_store():
+    """SECRETS_FILE 依赖 DATA_DIR，而 DATA_DIR 在自测里会被改指向临时目录，
+    所以不能提前创建实例，用函数惰性构造。"""
+    try:
+        import secure_store
+    except Exception:
+        return None
+    return secure_store.DpapiStore(SECRETS_FILE)
 
 
 def ensure_dirs():
@@ -109,10 +151,32 @@ def load_json(path, fallback):
 
 
 def save_json(path, value):
-    tmp = path + ".tmp"
-    with io.open(tmp, "w", encoding="utf-8") as f:
-        json.dump(value, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
+    """原子写。临时文件名必须每线程不同：
+    并发时两个请求都写 state.json.tmp 会撞在一起（
+    实测会抛 PermissionError: 另一个程序正在使用此文件）。"""
+    tmp = "%s.%d.%d.%s.tmp" % (path, os.getpid(),
+                                threading.get_ident(),
+                                binascii.hexlify(os.urandom(4)).decode("ascii"))
+    try:
+        with io.open(tmp, "w", encoding="utf-8") as f:
+            json.dump(value, f, ensure_ascii=False, indent=2)
+        # Windows 上目标文件被另一个线程/杀软瞬时占用时 os.replace 会抛
+        # PermissionError（WinError 5/32）。重试几次比直接 500 好。
+        last = None
+        for _ in range(8):
+            try:
+                os.replace(tmp, path)
+                return
+            except OSError as e:
+                last = e
+                time.sleep(0.02)
+        raise last
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except Exception:
+                pass
 
 
 def local_ips():
@@ -246,6 +310,39 @@ class Hub(object):
         # 实时推送：订阅了 /api/events 的连接。每项 {wfile, lock, alive, agent}
         self.sse = []
         self.sse_lock = threading.Lock()
+        # 配对码限速：ip -> {"n": 失败次数, "first": 起始时, "until": 封到什么时候}
+        self.pair_fails = {}
+        # 同步的「读-合并-写」必须串行，否则两个并发请求会互相覆盖（丢更新）
+        self.state_lock = threading.Lock()
+
+    # ---------- 配对码限速 ----------
+
+    def pair_blocked(self, ip):
+        with self.lock:
+            rec = self.pair_fails.get(ip)
+            if not rec:
+                return 0
+            now = int(time.time() * 1000)
+            if rec.get("until") and now < rec["until"]:
+                return int((rec["until"] - now) / 1000) + 1
+            return 0
+
+    def note_pair_fail(self, ip):
+        now = int(time.time() * 1000)
+        with self.lock:
+            rec = self.pair_fails.get(ip) or {"n": 0, "first": now, "until": 0}
+            if now - rec["first"] > PAIR_WINDOW_MS:
+                rec = {"n": 0, "first": now, "until": 0}
+            rec["n"] += 1
+            if rec["n"] >= PAIR_MAX_FAILS:
+                rec["until"] = now + PAIR_WINDOW_MS
+                rec["n"] = 0
+                rec["first"] = now
+            self.pair_fails[ip] = rec
+
+    def clear_pair_fail(self, ip):
+        with self.lock:
+            self.pair_fails.pop(ip, None)
 
     # ---------- 实时推送 ----------
 
@@ -354,14 +451,35 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("access-control-allow-headers", "authorization, content-type, x-filename")
         self.send_header("access-control-allow-methods", "GET, POST, DELETE, OPTIONS")
 
-    def _json(self, code, obj):
+    def _json(self, code, obj, extra=None):
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(code)
         self.send_header("content-type", "application/json; charset=utf-8")
         self.send_header("content-length", str(len(body)))
         self._cors()
+        for k, v in (extra or {}).items():
+            self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
+
+    def _drain(self, limit=4 * 1024 * 1024):
+        """把没读完的请求体丢掉再回错误。
+
+        不排空就直接断连，客户端还在发数据时收到 RST，会报
+        ConnectionAbortedError 而不是看到真正的 413。"""
+        try:
+            n = int(self.headers.get("content-length") or 0)
+        except ValueError:
+            n = 0
+        left = min(n, limit)
+        try:
+            while left > 0:
+                chunk = self.rfile.read(min(65536, left))
+                if not chunk:
+                    break
+                left -= len(chunk)
+        except Exception:
+            pass
 
     def _raw(self, code, data, ctype, extra=None):
         self.send_response(code)
@@ -375,16 +493,33 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def _body(self):
+    # ---------- 请求体 ----------
+
+    def _body(self, limit=None):
+        """读请求体。超过上限就不读，直接抛 TooLarge（以前不限，
+        局域网里发一个超大 body 就能把内存吃光）。"""
+        limit = MAX_FILE if limit is None else limit
         try:
             n = int(self.headers.get("content-length") or 0)
         except ValueError:
             n = 0
-        return self.rfile.read(n) if n else b""
+        if n > limit:
+            raise TooLarge(n)
+        if n <= 0:
+            return b""
+        data = self.rfile.read(n)
+        if len(data) > limit:
+            raise TooLarge(len(data))
+        return data
 
-    def _body_json(self):
+    def _body_json(self, limit=None):
         try:
-            return json.loads(self._body().decode("utf-8") or "{}")
+            raw = self._body(MAX_JSON if limit is None else limit)
+        except TooLarge as e:
+            raise
+        try:
+            obj = json.loads(raw.decode("utf-8") or "{}")
+            return obj if isinstance(obj, dict) else {}
         except Exception:
             return {}
 
@@ -452,6 +587,19 @@ class Handler(BaseHTTPRequestHandler):
         self._route("DELETE")
 
     def _route(self, method):
+        try:
+            return self._route_inner(method)
+        except TooLarge as e:
+            # 先把没读完的 body 排掉，再回 413；否则客户端会看到 RST
+            self._drain()
+            self.close_connection = True
+            return self._json(413, {"error": "too-large", "bytes": e.size},
+                              {"connection": "close"})
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
+            return None
+
+    def _route_inner(self, method):
         path = self.path.split("?")[0]
 
         # 手机扫描局域网时先打这个：免认证，只回一个身份标记，不含任何隐私
@@ -529,7 +677,7 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/api/host/file/"):
             if not self._is_local():
                 return self._json(403, {"error": "local-only"})
-                name = os.path.basename(unquote(path[len("/api/host/file/"):]))
+            name = os.path.basename(unquote(path[len("/api/host/file/"):]))
             fp = os.path.join(FILE_DIR, name)
             if method == "DELETE":
                 try:
@@ -585,17 +733,24 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, {"ok": True, "alias": HUB.alias})
 
         if path == "/api/pair" and method == "POST":
+            ip = self.client_address[0]
+            wait = HUB.pair_blocked(ip)
+            if wait > 0:
+                HUB.log("配对被限速：%s 还需等 %d 秒" % (ip, wait))
+                return self._json(429, {"error": "too-many-attempts", "retryAfter": wait})
             body = self._body_json()
             if str(body.get("code") or "").strip() != HUB.pair_code:
-                HUB.log("配对失败：配对码不对（来自 %s）" % self.client_address[0])
+                HUB.note_pair_fail(ip)
+                HUB.log("配对失败：配对码不对（来自 %s）" % ip)
                 return self._json(401, {"error": "bad-code"})
+            HUB.clear_pair_fail(ip)
             tk = HUB.add_token(body.get("deviceName"))
             HUB.log("已配对：%s" % ((body.get("deviceName") or "device")[:30]))
             return self._json(200, {"token": tk})
 
         if path == "/api/version":
             # 电脑端界面（localhost）查版本不需要令牌
-            if not (self._is_local() or HUB.check_token(self._token())):
+            if not ((LOCAL_FREE and self._is_local()) or HUB.check_token(self._token())):
                 return self._json(401, {"error": "unauthorized"})
             return self._json(200, {
                 "version": APP_VERSION,
@@ -608,7 +763,9 @@ class Handler(BaseHTTPRequestHandler):
             # 本机（127.0.0.1）免令牌：能连到本机端口就说明已经在本机了，
             # 而电脑端自己的界面就是由这个端口托管的，它必须能读写同一份数据，
             # 否则电脑上的对话永远进不了同步。
-            if not (self._is_local() or HUB.check_token(self._token())):
+            # LOCAL_FREE 只是给自测用的开关，默认开。
+            local_free = LOCAL_FREE and self._is_local()
+            if not (local_free or HUB.check_token(self._token())):
                 return self._json(401, {"error": "unauthorized"})
 
             if path == "/api/version":
@@ -666,10 +823,12 @@ class Handler(BaseHTTPRequestHandler):
 
             if path == "/api/sync" and method == "POST":
                 incoming = self._body_json()
-                local = load_json(STATE_FILE, {"conversations": {}, "tombstones": {},
-                                               "skills": None, "skillsAt": 0})
-                merged = merge_state(local, incoming)
-                save_json(STATE_FILE, merged)
+                # 读-合并-写串行：并发请求交叠会互相覆盖
+                with HUB.state_lock:
+                    local = load_json(STATE_FILE, {"conversations": {}, "tombstones": {},
+                                                   "skills": None, "skillsAt": 0})
+                    merged = merge_state(local, incoming)
+                    save_json(STATE_FILE, merged)
                 HUB.log("同步完成：%d 条对话" % len(merged["conversations"]))
                 # 实时推送：把这次变更告诉其他端（发起方自己不用收，它已经拿到结果）
                 HUB.broadcast("changed", {"from": str(incoming.get("device") or "device"),
@@ -699,7 +858,7 @@ class Handler(BaseHTTPRequestHandler):
                 for ch in '\\/:*?"<>|':
                     safe = safe.replace(ch, "_")
                 safe = safe[:120] or "file"
-                data = self._body()
+                data = self._body(MAX_FILE)
                 if not data:
                     return self._json(400, {"error": "empty"})
                 name, i = safe, 1
@@ -738,20 +897,38 @@ class Handler(BaseHTTPRequestHandler):
         if not path or path == "/":
             path = "/index.html"
         rel = path.lstrip("/")
-        if ".." in rel:
+
+        # 只接受干净的相对路径：拒绝 ..、反斜杠、隐藏文件（.git/.env 之类）
+        if ".." in rel or "\\" in rel or "\x00" in rel:
             return self._json(400, {"error": "bad-path"})
+        if any(seg.startswith(".") for seg in rel.split("/") if seg):
+            return self._json(404, {"error": "not-found"})
 
         if assets is not None:
             data = assets.get(rel)
             if data is None:
+                # SPA 回落只给「无扩展名」的路径。
+                # 以前任何路径都回首页，于是 /package.json 也返回 200，
+                # 既掩盖了路径探测，也让客户端分不清 404 和首页。
+                if os.path.splitext(rel)[1]:
+                    return self._json(404, {"error": "not-found"})
                 data = assets.get("index.html")
                 if data is None:
                     return self._json(404, {"error": "not-found"})
                 rel = "index.html"
             return self._raw(200, data, content_type(rel))
 
-        fp = os.path.join(getattr(self.server, "www_dir", ""), rel)
+        root = getattr(self.server, "www_dir", "") or ""
+        fp = os.path.abspath(os.path.join(root, rel))
+        if not root or not fp.startswith(os.path.abspath(root)):
+            return self._json(400, {"error": "bad-path"})
         if not os.path.isfile(fp):
+            # 无扩展名 → 回首页（同上面）
+            if not os.path.splitext(rel)[1]:
+                idx = os.path.join(os.path.abspath(root), "index.html")
+                if os.path.isfile(idx):
+                    with open(idx, "rb") as f:
+                        return self._raw(200, f.read(), content_type("index.html"))
             return self._json(404, {"error": "not-found"})
         with open(fp, "rb") as f:
             return self._raw(200, f.read(), content_type(rel))
@@ -924,6 +1101,22 @@ WINDOW_TITLE_HINT = "钥匙"
 WEBVIEW_STATE = {"checked": False, "ok": False, "why": ""}
 
 
+def fetch_sidecar_hash(url):
+    """去拉 `<url>.sha256` 旁文件。返回十六进制哈希或空串。
+
+    release 页不提供 digest 时的备选：把一个同名 .sha256 文件一起上传即可。
+    内容格式随意，取里面第一个 64 位十六进制串（兼容 `hash  filename` 写法）。"""
+    import re
+    try:
+        req = urllib.request.Request(url + ".sha256", headers={"user-agent": "keyapp-updater/1"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            text = r.read(4096).decode("utf-8", "replace")
+        m = re.search(r"\b([0-9a-fA-F]{64})\b", text)
+        return m.group(1).lower() if m else ""
+    except Exception:
+        return ""
+
+
 def write_update_script(script_path, target, new_exe, old_path):
     """生成「等进程退出 → 改名旧版 → 放新版 → 启动」的 cmd 脚本。
 
@@ -965,7 +1158,43 @@ def write_update_script(script_path, target, new_exe, old_path):
 class _Bridge:
     """暴露给页面的极小接口。
     open_external — 外链丢给系统浏览器，别把整个应用导航走
-    self_update   — 下载新版 exe 并自己换上去（无需手动下载）"""
+    self_update   — 下载新版 exe 并自己换上去（无需手动下载）
+    secure_*      — Windows DPAPI 加密存密钥（不再明文放 localStorage）"""
+
+    def secure_available(self):
+        st = _make_secure_store()
+        return bool(st and st.is_available())
+
+    def secure_get(self, key):
+        st = _make_secure_store()
+        if not st:
+            return None
+        try:
+            return st.get(key)
+        except Exception as e:
+            HUB.log("读取密钥失败：%s" % e)
+            return None
+
+    def secure_set(self, key, value):
+        st = _make_secure_store()
+        if not st:
+            return False
+        try:
+            return bool(st.set(key, value))
+        except Exception as e:
+            HUB.log("保存密钥失败：%s" % e)
+            return False
+
+    def secure_remove(self, key):
+        st = _make_secure_store()
+        if not st:
+            return False
+        try:
+            return bool(st.remove(key))
+        except Exception as e:
+            HUB.log("删除密钥失败：%s" % e)
+            return False
+
 
     def open_external(self, url):
         try:
@@ -979,22 +1208,29 @@ class _Bridge:
     def app_version(self):
         return APP_VERSION
 
-    def self_update(self, url):
+    def self_update(self, url, sha256=""):
         """下载并安装新版。返回 {ok, error}。
 
+        sha256：期望的十六进制哈希（可空）。给了就必须一致才装。
+          电脑端的 exe 里跑着用户的密钥，下错一个文件就把整个程序换掉了，
+          所以没校验时至少去拉一个 .sha256 旁文件；两样都没有就拒装。
+
         Windows 不允许覆盖正在运行的 exe，但**允许改名**，所以：
-          1. 下到 keyapp-data/update/钥匙-new.exe
+          1. 下到 keyapp-data/update/new.exe
           2. 启一个分离的 cmd：等我们退出 → 改名旧 exe → 放新的 → 启动
           3. 本进程直接 _exit
         中途任何一步失败都把临时文件删干净，原 exe 不动。"""
         try:
-            return self._self_update(url)
+            return self._self_update(url, sha256)
         except Exception as e:
             HUB.log("自动更新失败：%s" % e)
             return {"ok": False, "error": str(e)}
 
-    def _self_update(self, url):
-        if not isinstance(url, str) or not url.lower().startswith("https://"):
+    def _self_update(self, url, sha256=""):
+        ok_scheme = url.lower().startswith("https://") if isinstance(url, str) else False
+        if UPDATE_ALLOW_HTTP and isinstance(url, str) and url.lower().startswith("http://127.0.0.1"):
+            ok_scheme = True
+        if not ok_scheme:
             return {"ok": False, "error": "bad-url"}
         if not getattr(sys, "frozen", False):
             # 开发模式（直接跑 .py）没有可替换的 exe，只开链接
@@ -1019,16 +1255,21 @@ class _Bridge:
             "user-agent": "keyapp-updater/1",
             "accept": "application/octet-stream",
         })
+        digest = hashlib.sha256()
+        total = 0
         with urllib.request.urlopen(req, timeout=60) as r, open(tmp, "wb") as f:
-            total = 0
             while True:
                 chunk = r.read(262144)
                 if not chunk:
                     break
                 f.write(chunk)
+                digest.update(chunk)
                 total += len(chunk)
                 if total > 400 * 1024 * 1024:
-                    raise IOError("文件太大，放弃")
+                    f.close()
+                    os.remove(tmp)
+                    return {"ok": False, "error": "文件太大，放弃"}
+        actual = digest.hexdigest()
 
         size = os.path.getsize(tmp)
         if size < 3 * 1024 * 1024:
@@ -1038,6 +1279,23 @@ class _Bridge:
             if f.read(2) != b"MZ":
                 os.remove(tmp)
                 return {"ok": False, "error": "下载的内容不是有效的 exe"}
+
+        # ---------- SHA-256 校验 ----------
+        want = (sha256 or "").strip().lower()
+        if want.startswith("sha256:"):
+            want = want[7:]
+        if not want:
+            want = fetch_sidecar_hash(url)
+        if not want:
+            os.remove(tmp)
+            HUB.log("更新被拒：拿不到校验值")
+            return {"ok": False, "error": "no-checksum"}
+        if want != actual:
+            os.remove(tmp)
+            HUB.log("更新被拒：校验失败 期望 %s 实际 %s" % (want[:16], actual[:16]))
+            return {"ok": False, "error": "checksum-mismatch",
+                    "expected": want[:16], "actual": actual[:16]}
+        HUB.log("校验通过 %s…" % actual[:16])
 
         old = target + ".old.exe"
         script = write_update_script(

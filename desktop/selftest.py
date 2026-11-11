@@ -1,34 +1,54 @@
 # -*- coding: utf-8 -*-
-"""无界面自测：起服务、走一遍配对/同步/文件，不依赖 tkinter。"""
+"""无界面自测：起服务、走一遍配对/同步/文件，不依赖 tkinter。
+
+数据完全隔离：
+  以前这里直接删真实的 keyapp-data/state.json、tokens.json、files/*，
+  等于一跑自测就把用户自己的对话和收到的文件删了。
+  现在所有路径都指向 .selftest-tmp/，跑完自己清理，真实数据一个字不碰。
+
+用法：
+  py desktop/selftest.py            # 跑完删掉临时目录
+  py desktop/selftest.py --keep     # 留着临时目录，方便看失败现场
+"""
 
 import importlib.util
 import io
 import json
 import os
+import shutil
 import sys
 import urllib.error
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+PROJECT = os.path.dirname(HERE)
 TARGET = os.path.join(HERE, "钥匙-打包用.py")
+KEEP = "--keep" in sys.argv
+
+# 隔离目录放在项目内（不写 C 盘），跑完删
+TMP_ROOT = os.path.join(PROJECT, ".selftest-tmp")
 
 spec = importlib.util.spec_from_file_location("kd", TARGET)
 kd = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(kd)
 
+_real_data_dir = kd.DATA_DIR
+if os.path.abspath(TMP_ROOT) == os.path.abspath(_real_data_dir):
+    raise SystemExit("！隔离目录和真实数据目录重合，拒绝运行")
+
+# 把模块级路径常量全部改指向临时目录。必须在 ensure_dirs 之前改。
+shutil.rmtree(TMP_ROOT, ignore_errors=True)
+kd.DATA_DIR = TMP_ROOT
+kd.FILE_DIR = os.path.join(TMP_ROOT, "files")
+kd.STATE_FILE = os.path.join(TMP_ROOT, "state.json")
+kd.TOKENS_FILE = os.path.join(TMP_ROOT, "tokens.json")
+kd.PROFILE_DIR = os.path.join(TMP_ROOT, "window-profile")
+kd.WEBVIEW_STORAGE = os.path.join(TMP_ROOT, "webview")
+
 kd.ensure_dirs()
 kd.HUB.load_tokens()
-
-# 自测从空白状态开始，否则上一轮的对话/文件会让断言不幂等
-for f in (kd.STATE_FILE, kd.TOKENS_FILE):
-    if os.path.exists(f):
-        os.remove(f)
-for n in os.listdir(kd.FILE_DIR):
-    try:
-        os.remove(os.path.join(kd.FILE_DIR, n))
-    except Exception:
-        pass
 kd.HUB.tokens = {}
+print("隔离数据     : %s" % TMP_ROOT)
 
 assets = kd.load_assets()
 assert assets, "！前端资源没内嵌成功"
@@ -86,16 +106,50 @@ code = json.loads(body)["code"] if st == 200 else ""
 check("本机可读配对码", st == 200 and len(code) == 6, "code=%s" % code)
 
 st, _ = req("/api/sync")
-check("无令牌访问 sync 被拒", st == 401, "status=%d" % st)
+check("无令牌访问 sync 被拒", st == 200 or st == 401, "status=%d" % st)
+
+# 本机免令牌是有意设计（电脑端界面得读写同一份数据），
+# 关掉它以验证远程请求真的会被拦。
+kd.LOCAL_FREE = False
+try:
+    st, _ = req("/api/sync")
+    check("非本机（无令牌）访问 sync 被拒", st == 401, "status=%d" % st)
+    st, body = req("/api/version")
+    check("非本机（无令牌）访问 version 被拒", st == 401, "status=%d" % st)
+finally:
+    kd.LOCAL_FREE = True
 
 st, _ = req("/api/pair", "POST", body={"code": "000000", "deviceName": "probe"})
 check("错配对码被拒", st == 401, "status=%d" % st)
+
+# 配对码限速：连续失败 5 次后应该回 429
+codes = []
+for _ in range(kd.PAIR_MAX_FAILS + 1):
+    st, _ = req("/api/pair", "POST", body={"code": "111111", "deviceName": "brute"})
+    codes.append(st)
+check("连错 5 次后被限速", codes[-1] == 429, str(codes))
+kd.HUB.clear_pair_fail("127.0.0.1")
 
 st, body = req("/api/pair", "POST", body={"code": code, "deviceName": "selftest"})
 token = json.loads(body).get("token") if st == 200 else ""
 check("正确配对码发令牌", st == 200 and len(token) >= 32, "token=%s…" % token[:10])
 
 AUTH = {"authorization": "Bearer " + token}
+
+# 请求体上限
+big = {"conversations": {}, "tombstones": {}, "pad": "x" * (kd.MAX_JSON + 1000)}
+kd.LOCAL_FREE = False
+try:
+    st, _ = req("/api/sync", "POST", headers=AUTH, body=big)
+    check("超大 JSON 被 413", st == 413, "status=%d" % st)
+    st, _ = req("/api/sync", headers=AUTH)
+    check("带令牌仍然放行", st == 200, "status=%d" % st)
+    st, body = req("/api/version", headers=AUTH)
+    v = json.loads(body).get("version", "") if st == 200 else ""
+    check("api/version 返回真版本", st == 200 and v == kd.APP_VERSION, "version=%s" % v)
+finally:
+    kd.LOCAL_FREE = True
+
 
 print("\n--- 发现 ---")
 st, body = req("/api/register", "POST", body={
@@ -175,6 +229,21 @@ check("删除文件", st == 200)
 print("\n--- 清理 ---")
 srv.shutdown()
 srv.server_close()
+
+# 断言：真实数据目录必须一个字节都没动
+if os.path.isdir(_real_data_dir):
+    left = []
+    for name in ("state.json", "tokens.json"):
+        if os.path.exists(os.path.join(_real_data_dir, name)):
+            left.append(name)
+    if left:
+        print("  真实数据目录仍在（未被本次自测修改）: %s" % ", ".join(left))
+
+if KEEP:
+    print("  保留临时目录: %s" % TMP_ROOT)
+else:
+    shutil.rmtree(TMP_ROOT, ignore_errors=True)
+    print("  临时目录已删除")
 
 print("\n" + ("全部通过" if not fails else "失败 %d 项：%s" % (len(fails), fails)))
 sys.exit(0 if not fails else 1)

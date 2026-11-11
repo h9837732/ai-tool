@@ -57,6 +57,9 @@ a = Analysis(
         'clr',
         'pythonnet',
         'clr_loader',
+        # 驱动 DPAPI 的密钥模块：它是在函数里惰性 import 的，
+        # 静态分析能找到，但显式写上更保险（少它的话加密会静默降级成明文）
+        'secure_store',
     ],
     hookspath=[],
     hooksconfig={},
@@ -105,6 +108,24 @@ exe = EXE(
     return SPEC
 
 
+def iter_toc_text(work):
+    """把 work 目录下所有 .toc 的内容读出来。
+
+    PyInstaller 把 TOC 放在 WORK/<应用名>/ 里，不是 WORK 顶层，
+    所以必须递归找 —— 以前只扫顶层，等于永远查不到东西。"""
+    if not os.path.isdir(work):
+        return
+    for root, _dirs, files in os.walk(work):
+        for name in files:
+            if not name.endswith(".toc"):
+                continue
+            try:
+                with open(os.path.join(root, name), "r", encoding="utf-8", errors="ignore") as f:
+                    yield os.path.join(root, name), f.read()
+            except Exception:
+                continue
+
+
 def assert_no_qt(dist_exe, work):
     """D12 的闸门：确保 Qt 没被偷偷打进去。
 
@@ -114,17 +135,19 @@ def assert_no_qt(dist_exe, work):
     打包会以一个看不懂的错误失败。这里直接说清楚原因。"""
     hits = []
 
-    for name in os.listdir(work) if os.path.isdir(work) else []:
-        if not name.endswith(".toc"):
-            continue
-        try:
-            with open(os.path.join(work, name), "r", encoding="utf-8", errors="ignore") as f:
-                txt = f.read()
-        except Exception:
-            continue
-        for token in ("Qt5Core.dll", "Qt6Core.dll", "PyQt5", "PyQt6", "PySide2", "PySide6"):
+    # 只认真实的 DLL 名和真实路径片段。
+    # 不能只搜 "PyQt5"：Analysis-00.toc 里就带着我们自己的 excludes 清单，
+    # 里面明写着 'PyQt5'，那样会把自己的配置当成污染。
+    QT_TOKENS = (
+        "Qt5Core.dll", "Qt6Core.dll",
+        "/PyQt5/", "\\PyQt5\\", "/PyQt6/", "\\PyQt6\\",
+        "/PySide2/", "\\PySide2\\", "/PySide6/", "\\PySide6\\",
+        "Qt5/plugins", "Qt6/plugins",
+    )
+    for path, txt in iter_toc_text(work):
+        for token in QT_TOKENS:
             if token in txt:
-                hits.append(token + " @ " + name)
+                hits.append(token + " @ " + os.path.basename(os.path.dirname(path)) + "/" + os.path.basename(path))
 
     try:
         with open(dist_exe, "rb") as f:
@@ -186,6 +209,22 @@ def assert_version_baked():
     print("版本     : %s" % want)
 
 
+def assert_secure_store(dist_exe, work):
+    """确认 DPAPI 那个模块真的进包了。
+
+    少它不会崩，只会静默退回明文存密钥 —— 这种“降级失败”最难发现，
+    所以打包时直接查一下。"""
+    hits = []
+    for path, txt in iter_toc_text(work):
+        if "secure_store" in txt:
+            hits.append(os.path.basename(path))
+    if not hits:
+        print("")
+        print("!! 打包结果里没有 secure_store，密钥会降级成明文存储")
+        return False
+    return True
+
+
 def main():
     if not os.path.isfile(BUILD_PY):
         raise SystemExit("缺 %s，先跑 py desktop/embed_assets.py" % BUILD_PY)
@@ -220,11 +259,12 @@ def main():
         raise SystemExit("没生成 %s" % out)
 
     ok = assert_no_qt(out, WORK)
+    ok_secure = assert_secure_store(out, WORK)
 
     if "--keep-build" not in sys.argv:
         shutil.rmtree(WORK, ignore_errors=True)
 
-    if not ok:
+    if not ok or not ok_secure:
         raise SystemExit("打包结果不合格，已中止")
 
     print("")

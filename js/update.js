@@ -86,9 +86,12 @@
   function parseGithub(j) {
     if (!j || !j.tag_name) return null;
     var asset = pickAsset(j.assets);
+    /* GitHub 新版 API 给 assets 带了 digest（"sha256:..."）。有就带上，
+       没有就让安装端去拉 .sha256 旁文件，两样都没有就拒装。 */
     return {
       version: String(j.tag_name).replace(/^v/i, ''),
       url: asset.browser_download_url || j.html_url || '',
+      digest: String(asset.digest || ''),
       notes: String(j.body || '').slice(0, 500)
     };
   }
@@ -188,13 +191,14 @@
   }
 
   /* 就地在应用内更新。返回 Promise<{ok, mode, error}> */
-  function install(url) {
+  function install(url, digest) {
     if (!url) return Promise.resolve({ ok: false, error: 'nourl' });
     var p = platform();
+    var sha = String(digest || '').replace(/^sha256:/i, '');
 
     /* 电脑端：交给 Python 下载并替换 exe，进程会重启 */
     if (p === 'desktop') {
-      return Promise.resolve(global.pywebview.api.self_update(url))
+      return Promise.resolve(global.pywebview.api.self_update(url, sha))
         .then(function (r) {
           if (r && r.ok) return { ok: true, mode: 'desktop' };
           if (r && r.error === 'dev-mode') return { ok: false, error: 'dev-mode' };
@@ -205,7 +209,7 @@
 
     /* 手机端：原生下载 APK 再弹系统安装 */
     if (p === 'android' && global.Native && global.Native.ApkUpdater && global.Native.ApkUpdater.hasPlugin()) {
-      return Promise.resolve(global.Native.ApkUpdater.install(url))
+      return Promise.resolve(global.Native.ApkUpdater.install(url, sha))
         .then(function (r) {
           if (r && r.ok) return { ok: true, mode: 'android' };
           return { ok: false, error: (r && r.error) || 'failed' };

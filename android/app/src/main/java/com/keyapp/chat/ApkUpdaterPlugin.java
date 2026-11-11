@@ -91,12 +91,13 @@ public class ApkUpdaterPlugin extends Plugin {
     }
 
     /**
-     * 下载并安装。参数：url
+     * 下载并安装。参数：url, sha256（可空）
      * 返回 { ok, error }
      */
     @PluginMethod
     public void install(final PluginCall call) {
         final String urlStr = call.getString("url");
+        final String wantSha = call.getString("sha256", "");
         if (urlStr == null || !urlStr.startsWith("http")) {
             call.reject("url is required");
             return;
@@ -133,11 +134,13 @@ public class ApkUpdaterPlugin extends Plugin {
 
                     InputStream in = conn.getInputStream();
                     FileOutputStream fos = new FileOutputStream(out);
+                    java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
                     byte[] buf = new byte[65536];
                     long total = 0;
                     int n;
                     while ((n = in.read(buf)) > 0) {
                         fos.write(buf, 0, n);
+                        md.update(buf, 0, n);
                         total += n;
                         if (total > 400L * 1024 * 1024) {
                             throw new Exception("file too large");
@@ -161,6 +164,26 @@ public class ApkUpdaterPlugin extends Plugin {
                     if (read < 2 || magic[0] != 'P' || magic[1] != 'K') {
                         out.delete();
                         fail(pending, "not an apk");
+                        return;
+                    }
+
+                    /* SHA-256 校验：没给就拒装，宁可不更新也不装一个来源不明的包 */
+                    String expected = wantSha == null ? "" : wantSha.trim().toLowerCase();
+                    if (expected.startsWith("sha256:")) expected = expected.substring(7);
+                    if (expected.isEmpty()) {
+                        out.delete();
+                        fail(pending, "no-checksum");
+                        return;
+                    }
+                    StringBuilder sb = new StringBuilder();
+                    for (byte b : md.digest()) {
+                        sb.append(String.format("%02x", b));
+                    }
+                    String actual = sb.toString();
+                    if (!actual.equals(expected)) {
+                        out.delete();
+                        fail(pending, "checksum-mismatch expected " + expected.substring(0, Math.min(16, expected.length()))
+                                + " got " + actual.substring(0, 16));
                         return;
                     }
 
